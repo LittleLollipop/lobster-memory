@@ -1,0 +1,2 @@
+# lobster-memory runtime dependencies
+# axolotl_rs is built separately via maturin (see install.sh)
