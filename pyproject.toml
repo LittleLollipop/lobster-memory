@@ -1,0 +1,9 @@
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lobster-memory"
+version = "0.1.0"
+description = "Long-term graph memory for AI agents"
+requires-python = ">=3.10"
