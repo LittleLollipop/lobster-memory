@@ -1,5 +1,6 @@
 """MemoryGraph — thin wrapper over axolotl_rs.AxolotlGraph."""
 
+import fcntl
 import logging
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -24,6 +25,13 @@ class MemoryGraph:
 
     def __init__(self, data_path: str = "memory.axeb"):
         self._path = data_path
+        # 文件锁：runner 每次调用都是独立进程，若同时跑 recall + remember
+        # 并发 open/save 同一 memory.axeb，写者的 save() 会稳定抛
+        # RuntimeError: Io("No such file or directory")（axolotl 非并发安全）。
+        # 用 fcntl 排他锁把同文件的并发访问串行化，避免撞崩。
+        self._lock_path = data_path + ".lock"
+        self._lock_fd = open(self._lock_path, "w")
+        fcntl.flock(self._lock_fd, fcntl.LOCK_EX)  # 阻塞直到独占
         self._g = axolotl_rs.AxolotlGraph.open(data_path)
         self._ensure_root()
 
@@ -394,7 +402,11 @@ class MemoryGraph:
         return self._g.save()
 
     def close(self):
-        self._g.close()
+        try:
+            self._g.close()
+        finally:
+            fcntl.flock(self._lock_fd, fcntl.LOCK_UN)
+            self._lock_fd.close()
 
     def __repr__(self) -> str:
         return f"<MemoryGraph v={self.vertex_count} e={self.edge_count} path={self._path}>"
