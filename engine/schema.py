@@ -220,9 +220,14 @@ def deduplicate_extraction(
         deduped_nodes.append(node)
 
     # ── Update edge references ──
-    valid_ids = set(label_to_id.keys()) | set(seen_in_batch.keys())
-    # Also collect actual ids from deduped nodes
-    valid_node_ids = {n["id"] for n in deduped_nodes}
+    # Valid ids = existing graph node ids + this-batch node ids.
+    # An edge is kept if EITHER endpoint is an existing or newly-created node.
+    # (Feedback/relation edges often connect to pre-existing nodes.)
+    valid_node_ids = (
+        set(existing_labels.keys())        # ids already in the graph
+        | set(seen_in_batch.values())      # ids created within this batch
+        | {n["id"] for n in deduped_nodes} # ids after remapping
+    )
 
     deduped_edges = []
     for edge in edges:

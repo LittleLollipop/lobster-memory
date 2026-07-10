@@ -78,6 +78,7 @@ class LobsterMemory:
                         valence=edge.get("valence", 0.0),
                         weight=edge.get("weight", 1.0),
                         domain=edge.get("domain", "emotion"),
+                        content=edge.get("content"),
                     )
                 else:
                     self._graph.remember_relation(

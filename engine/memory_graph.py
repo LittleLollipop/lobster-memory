@@ -137,6 +137,7 @@ class MemoryGraph:
         valence: float,
         weight: float = 1.0,
         domain: str = "emotion",
+        content: Optional[str] = None,
     ) -> Tuple[int, int]:
         """Record a piece of feedback (praise/criticism)."""
         from_nid = str_to_id(from_id)
@@ -163,6 +164,31 @@ class MemoryGraph:
             props = existing_dict
 
         self._g.add_edge(from_nid, to_nid, weight, props_to_dict(props))
+
+        # ── Also create an emotion feedback-event NODE so it is recallable ──
+        # axolotl has no edge-enumeration API, so feedback is stored both as
+        # an edge (graph structure) AND as an emotion-domain node (recallable
+        # via recall_by_feedback, which filters emotion vertices by valence).
+        fb_node_id = f"fb_event_{from_id}_{to_id}"
+        nid = self.remember_fact(
+            id_str=fb_node_id,
+            label=f"{category}反馈",
+            domain="emotion",
+            node_type="emotion",
+            weight=weight,
+            content=content,
+        )
+        raw = self._g.get_vertex(nid)
+        if raw is not None:
+            np = dict_from_props(dict(raw))
+            np["valence"] = valence
+            np["feedback_category"] = category
+            np["from_id"] = from_id
+            np["to_id"] = to_id
+            np["from"] = from_id
+            np["to"] = to_id
+            self._g.add_vertex(nid, props_to_dict(np))
+
         return from_nid, to_nid
 
     # ── Write: Community summary ────────────────────────
