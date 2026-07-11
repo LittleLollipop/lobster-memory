@@ -22,6 +22,8 @@
 
 > 诚实定位：**设计理念在第一梯队，工程成熟度还在早期**——尚缺时态版本化、未跑公开基准、单人维护。想秀的是脑子，不是 star 数。详见完整分析。
 
+![定位图](docs/positioning-map.svg)
+
 ## 快速开始
 
 ```bash
@@ -84,7 +86,9 @@ lobster-memory/
 │   └── schema.py         # 常量/枚举/容量参数
 └── docs/
     ├── design.md         # v3 详细设计方案
-    └── plan.md           # 原始方案文档
+    ├── plan.md           # 原始方案文档
+    ├── competitive-analysis.md  # 竞品对比分析
+    └── positioning-map.svg      # README 对比区块用的定位图
 ```
 
 ## 依赖

@@ -1,0 +1,63 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 680 470" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif">
+  <!-- background -->
+  <rect x="0" y="0" width="680" height="470" fill="#ffffff"/>
+
+  <!-- title -->
+  <text x="40" y="32" font-size="17" font-weight="700" fill="#1e293b">lobster-memory 在 AI 长期记忆赛道中的定位</text>
+  <text x="40" y="50" font-size="11" fill="#64748b">分析时间：2026-07-11 · 横轴=成熟度/生态，纵轴=设计先进度/理念新颖度</text>
+
+  <!-- quadrant shading (top-left = 理念领先但嫩) -->
+  <rect x="90" y="50" width="275" height="175" fill="#fef3c7" opacity="0.45"/>
+  <rect x="365" y="225" width="275" height="175" fill="#f1f5f9" opacity="0.6"/>
+
+  <!-- gridlines -->
+  <g stroke="#e2e8f0" stroke-width="1">
+    <line x1="90" y1="137.5" x2="640" y2="137.5"/>
+    <line x1="90" y1="225" x2="640" y2="225"/>
+    <line x1="90" y1="312.5" x2="640" y2="312.5"/>
+    <line x1="227.5" y1="50" x2="227.5" y2="400"/>
+    <line x1="365" y1="50" x2="365" y2="400"/>
+    <line x1="502.5" y1="50" x2="502.5" y2="400"/>
+  </g>
+
+  <!-- axes -->
+  <line x1="90" y1="50" x2="90" y2="400" stroke="#475569" stroke-width="2"/>
+  <line x1="90" y1="400" x2="640" y2="400" stroke="#475569" stroke-width="2"/>
+  <!-- arrowheads -->
+  <path d="M90 50 L85 62 L95 62 Z" fill="#475569"/>
+  <path d="M640 400 L628 395 L628 405 Z" fill="#475569"/>
+
+  <!-- axis labels -->
+  <text x="640" y="422" font-size="12" font-weight="600" fill="#334155" text-anchor="end">成熟度 / 生态 →</text>
+  <text x="78" y="44" font-size="12" font-weight="600" fill="#334155" text-anchor="middle" transform="rotate(-90 78 44)">设计先进度 / 理念新颖度 ↑</text>
+
+  <!-- quadrant annotations -->
+  <text x="100" y="68" font-size="10.5" fill="#b45309" font-weight="600">理念领先 · 工程早期</text>
+  <text x="630" y="68" font-size="10.5" fill="#475569" font-weight="600" text-anchor="end">成熟且先进</text>
+  <text x="630" y="392" font-size="10.5" fill="#64748b" text-anchor="end">成熟但保守</text>
+
+  <!-- points -->
+  <!-- Zep·Graphiti: x=541 y=113 -->
+  <circle cx="541" cy="113" r="9" fill="#94a3b8" stroke="#64748b" stroke-width="1.5"/>
+  <text x="541" y="98" font-size="11" font-weight="600" fill="#475569" text-anchor="middle">Zep·Graphiti</text>
+
+  <!-- Mem0: x=574 y=155 -->
+  <circle cx="574" cy="155" r="9" fill="#94a3b8" stroke="#64748b" stroke-width="1.5"/>
+  <text x="574" y="140" font-size="11" font-weight="600" fill="#475569" text-anchor="middle">Mem0</text>
+
+  <!-- Letta: x=502.5 y=207.5 -->
+  <circle cx="502.5" cy="207.5" r="9" fill="#94a3b8" stroke="#64748b" stroke-width="1.5"/>
+  <text x="502.5" y="192" font-size="11" font-weight="600" fill="#475569" text-anchor="middle">Letta</text>
+
+  <!-- Cognee: x=392.5 y=225 -->
+  <circle cx="392.5" cy="225" r="9" fill="#94a3b8" stroke="#64748b" stroke-width="1.5"/>
+  <text x="392.5" y="248" font-size="11" font-weight="600" fill="#475569" text-anchor="middle">Cognee</text>
+
+  <!-- lobster-memory: x=172.5 y=102.5 (accent) -->
+  <circle cx="172.5" cy="102.5" r="12" fill="#f59e0b" stroke="#b45309" stroke-width="2"/>
+  <text x="172.5" y="78" font-size="12.5" font-weight="800" fill="#b45309" text-anchor="middle">lobster-memory</text>
+  <text x="172.5" y="128" font-size="10" fill="#92400e" text-anchor="middle">（我们）</text>
+
+  <!-- footnote -->
+  <text x="40" y="450" font-size="10.5" fill="#94a3b8">注：坐标为定性评估（2026-07-11），非基准跑分；详见 docs/competitive-analysis.md</text>
+</svg>
