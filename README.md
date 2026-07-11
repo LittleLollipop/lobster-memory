@@ -4,6 +4,24 @@
 
 **技术底座**: [axolotl](https://github.com/LittleLollipop/axolotl) — Rust + PyO3 图数据库,AXEB 持久化 + WAL 恢复。
 
+## 与主流方案对比
+
+> 横向对比 Mem0 / Zep·Graphiti / Letta 等主流长期记忆方案（分析时间：**2026-07-11**）。完整分析见 [docs/competitive-analysis.md](docs/competitive-analysis.md)。
+
+| 能力 | Mem0 | Zep·Graphiti | Letta | **lobster-memory** |
+|---|:---:|:---:|:---:|:---:|
+| 存储模型 | vector+graph+KV | 时态知识图 | 分层 block | **图 + 情绪 valence** |
+| 因果关系边（caused/derived） | ❌ | ❌ | ❌ | ✅ |
+| 情绪 / valence 建模 | ❌ | ❌ | ❌ | ✅ |
+| 可观察 + 可核对的遗忘 | TTL 衰减 | 时态失效 | 摘要下沉 | ✅ **门控 + 五信号选择性剪枝** |
+| 递归自成长抽取（套娃） | ❌ | ❌ | ❌ | ✅ |
+| 图内自带「如何维护图」的指令 | ❌ | ❌ | ❌ | ✅ |
+| 全明文可观察（反黑盒） | 部分 | 部分 | 中 | ✅ |
+
+**四条别人没有的线**：① 抽取动作会读记忆 → 记忆越厚抽取越准（自成长闭环）；② 偏好/批评以情绪 valence 边落图；③ 遗忘是可查门控 + 选择性剪枝，不是静默衰减；④ 存因果不只存关联。
+
+> 诚实定位：**设计理念在第一梯队，工程成熟度还在早期**——尚缺时态版本化、未跑公开基准、单人维护。想秀的是脑子，不是 star 数。详见完整分析。
+
 ## 快速开始
 
 ```bash

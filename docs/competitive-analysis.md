@@ -1,6 +1,6 @@
 # 长期记忆方案竞品对比：lobster-memory vs 主流方案
 
-> 日期：2026-07-11
+> **分析时间：2026 年 7 月 11 日**（竞品数据以该时点公开信息为准，后续可能变化）
 > 目的：评估 lobster-memory（含 axolotl 图存储 + wb-lobster-memory 桥接）在 AI agent 长期记忆赛道中的真实水平，明确领先点与短板。
 > 数据来源：Mem0 / Zep(Graphiti) / Letta(MemGPT) / Cognee 等公开仓库与基准报告（详见文末「数据来源」）。
 
