@@ -1,5 +1,17 @@
 ---
-disable: false
+name: lobster-memory
+description: 基于知识图谱的 AI 长期记忆引擎（实体-关系-情绪 valence），支持自动抽取、因果边、递归自成长抽取与可观察的遗忘巩固。底层由 axolotl_rs (Rust 图存储) 驱动。
+version: 0.1.0
+author: Sai
+triggers:
+  - "长期记忆"
+  - "图记忆"
+  - "记忆图谱"
+allowed-tools:
+  - Bash
+requires:
+  python: ">=3.10"
+  env: []
 ---
 
 # lobster-memory — Long-term Graph Memory for Lobster Agents
