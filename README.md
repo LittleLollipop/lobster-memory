@@ -24,6 +24,12 @@
 
 ![定位图](docs/positioning-map.svg)
 
+## 支持平台
+
+> **当前仅支持 Apple Silicon (macOS aarch64 / M 系列芯片)**。
+> 预编译 wheel 仅提供 `aarch64-apple-darwin` 平台；源码构建也仅在 Apple Silicon 上验证过。
+> Intel Mac / Linux / Windows 暂未提供 wheel，且未经测试——欢迎在 issues 反馈你的平台需求。
+
 ## 快速开始
 
 ```bash

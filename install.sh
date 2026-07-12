@@ -13,6 +13,21 @@ AXOLOTL_URL="${AXOLOTL_URL:-https://github.com/LittleLollipop/axolotl.git}"
 AXOLOTL_DIR="${AXOLOTL_DIR:-/tmp/axolotl-build}"            # 源码构建目录（与 clone 目标一致）
 WHEELS_DIR="$SKILL_DIR/wheels"                              # 仓库内预编译 wheel 兜底
 
+# ── 平台检查：当前仅支持 Apple Silicon (macOS aarch64 / M 系列) ──
+check_platform() {
+  local os arch
+  os="$(uname -s)"
+  arch="$(uname -m)"
+  if [ "$os" != "Darwin" ] || [ "$arch" != "arm64" ]; then
+    echo "✗ 当前仅支持 Apple Silicon (macOS aarch64 / M 系列芯片)。" >&2
+    echo "  检测到平台: $os / $arch" >&2
+    echo "  其他平台 (Intel Mac / Linux / Windows) 暂无预编译 wheel，源码构建也未验证。" >&2
+    echo "  支持进度见: https://github.com/LittleLollipop/lobster-memory/issues" >&2
+    exit 1
+  fi
+}
+check_platform
+
 echo "=== lobster-memory installer ==="
 echo "  SKILL_DIR = $SKILL_DIR"
 echo "  VENV_DIR  = $VENV_DIR"

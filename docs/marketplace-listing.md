@@ -21,6 +21,8 @@
 - `version`: 0.1.0
 - `author`: Sai
 - `description`: WorkBuddy 接入 lobster-memory 长期图记忆的桥接技能……（见 SKILL.md）
+- `categories`: **Agents**（首选）；若允许多选，加 **Knowledge**
+- `topics`: memory, knowledge-graph, long-term-memory, ai-agent, workbuddy, agent-memory, llm-memory
 - `tags`: memory, knowledge-graph, long-term-memory, agent, workbuddy
 - `triggers`: 记住这个 / 用图记忆 / 回忆一下 / 巩固记忆 / 长期记忆
 - `allowed-tools`: [Bash]
@@ -30,6 +32,8 @@
 - `name`: lobster-memory
 - `version`: 0.1.0
 - `author`: Sai
+- `categories`: **Development**（首选）；若允许多选，加 **Knowledge**
+- `topics`: memory, knowledge-graph, graph-database, rust, pyo3, llm-memory, long-term-memory, ai-agent
 - `tags`: memory, knowledge-graph, rust, graph-database, long-term-memory
 - `allowed-tools`: [Bash]
 - `requires`: python >= 3.10
@@ -50,6 +54,7 @@
 
 ## 已知限制（诚实披露，避免差评）
 
+- **平台限制**：当前仅支持 **Apple Silicon (macOS aarch64 / M 系列芯片)**。预编译 wheel 为 `aarch64-apple-darwin`，Intel Mac / Linux / Windows 暂未提供 wheel 且未经测试。
 - **版本定位**：`0.x` 早期原型，单人维护。设计理念领先（递归自成长抽取 / 情绪 valence / 可观察遗忘 / 因果边），工程成熟度尚在早期。
 - **`axolotl_rs` 安装**：当前需 Rust 工具链源码构建，或从 PyPI / 仓库内 `wheels/` 安装预编译包。`install.sh` 已改为 wheel 优先、源码兜底，并在缺 Rust 时给出明确报错。
 - **未跑公开基准**：尚未提交 LongMemEval / DMR 等基准分数，"水平"目前为主观评估。

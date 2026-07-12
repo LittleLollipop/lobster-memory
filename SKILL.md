@@ -11,6 +11,7 @@ allowed-tools:
   - Bash
 requires:
   python: ">=3.10"
+  platform: "darwin-arm64"   # 仅支持 Apple Silicon (M 系列)
   env: []
 ---
 
