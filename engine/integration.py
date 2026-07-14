@@ -91,14 +91,9 @@ class MemorySession:
         parts.append("[当前记忆]")
         parts.append(
             f"  总节点 {stats['total_vertices']} | "
-            f"总边 {stats['total_edges']} | "
-            f"容量 {stats['caps']['vertex_pct']}%"
+            f"总边 {stats['total_edges']}"
         )
-        parts.append(
-            f"  按域: 情绪 {stats['by_domain'].get('emotion', 0)} | "
-            f"知识 {stats['by_domain'].get('knowledge', 0)} | "
-            f"任务 {stats['by_domain'].get('task', 0)}"
-        )
+        # Active nodes — the real "should I consolidate?" gauge
         if stats["active_7d"]:
             active = stats["active_7d"]
             parts.append(
@@ -106,6 +101,16 @@ class MemorySession:
                 f"知识 {active.get('knowledge', 0)} | "
                 f"任务 {active.get('task', 0)}"
             )
+        parts.append(
+            f"  按域: 情绪 {stats['by_domain'].get('emotion', 0)} | "
+            f"知识 {stats['by_domain'].get('knowledge', 0)} | "
+            f"任务 {stats['by_domain'].get('task', 0)}"
+        )
+        # Safety valve — not physical capacity
+        parts.append(
+            f"  软策略线 {stats['total_vertices']}/15000 "
+            f"({stats['caps']['vertex_pct']}%)  — 安全阀，非物理容量"
+        )
 
         # Recent consolidation highlights
         if self._last_consolidation_report:
