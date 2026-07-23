@@ -105,6 +105,10 @@ lobster-memory/
 
 ## 更新日志
 
+### v0.2.2 (2026-07-23)
+- 重新发布 v0.2.2：解决 SkillHub 上 v0.2.1 已被占用的问题
+- 无功能改动；版本号在 SKILL.md / `_skillhub_meta.json` / `pyproject.toml` / `engine/__init__.py` 四处同步
+
 ### v0.2.1 (2026-07-23)
 - **类型化遗忘修正**：所有记忆类型现在都可被遗忘（不再是「永不删」）
 - 遗忘阈值按抽象度分级 —— 越抽象保留越久：concept/community_summary 365 天、person/fact 180 天、task 90 天、event/emotion 7 天、未知类型 180 天

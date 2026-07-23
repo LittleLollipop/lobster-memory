@@ -27,7 +27,7 @@ from .schema import (
     validate_extraction,
 )
 
-__version__ = "0.2.1"
+__version__ = "0.2.2"
 __all__ = [
     "LobsterMemory",
     "MemorySession",
