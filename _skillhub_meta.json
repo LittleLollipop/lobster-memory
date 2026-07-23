@@ -1,0 +1,18 @@
+{
+  "name": "lobster-memory",
+  "version": "0.2.1",
+  "display_name": "龙虾长期图记忆引擎",
+  "display_name_en": "Lobster Long-term Graph Memory Engine",
+  "description": "基于知识图谱的 AI 长期记忆引擎（实体-关系-情绪 valence），支持自动抽取、因果边、递归自成长抽取与可观察的遗忘巩固。底层由 axolotl_rs（Rust 图存储）驱动。",
+  "description_zh": "基于知识图谱的 AI 长期记忆引擎（实体-关系-情绪 valence），支持自动抽取、因果边、递归自成长抽取与可观察的遗忘巩固。底层由 axolotl_rs（Rust 图存储）驱动。",
+  "description_en": "A knowledge-graph-based AI long-term memory engine (entity-relation-emotion valence) with auto-extraction, causal edges, recursive self-growing extraction, and observable consolidation/forgetting. Backed by axolotl_rs (Rust graph store).",
+  "visibility": "public",
+  "author": "Sai",
+  "license": "MIT",
+  "tags": ["memory", "knowledge-graph", "graph-database", "rust", "long-term-memory", "ai-agent"],
+  "dependencies": [],
+  "repository": "https://github.com/LittleLollipop/lobster-memory",
+  "homepage": "",
+  "created_at": "2026-07-10",
+  "updated_at": "2026-07-23"
+}

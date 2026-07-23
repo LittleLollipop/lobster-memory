@@ -18,7 +18,7 @@
 
 ### wb-lobster-memory（用户入口）
 - `name`: wb-lobster-memory
-- `version`: 0.1.0
+- `version`: 0.2.1
 - `author`: Sai
 - `description`: WorkBuddy 接入 lobster-memory 长期图记忆的桥接技能……（见 SKILL.md）
 - `categories`: **Agents**（首选）；若允许多选，加 **Knowledge**
@@ -30,7 +30,7 @@
 
 ### lobster-memory（依赖引擎）
 - `name`: lobster-memory
-- `version`: 0.1.0
+- `version`: 0.2.1
 - `author`: Sai
 - `categories`: **Development**（首选）；若允许多选，加 **Knowledge**
 - `topics`: memory, knowledge-graph, graph-database, rust, pyo3, llm-memory, long-term-memory, ai-agent

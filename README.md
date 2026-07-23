@@ -102,3 +102,25 @@ lobster-memory/
 - Python 3.10+
 - [axolotl_rs](https://github.com/LittleLollipop/axolotl) (通过 install.sh 自动构建)
 - Rust 工具链 (源码构建时;wheel 安装无需)
+
+## 更新日志
+
+### v0.2.1 (2026-07-23)
+- **类型化遗忘修正**：所有记忆类型现在都可被遗忘（不再是「永不删」）
+- 遗忘阈值按抽象度分级 —— 越抽象保留越久：concept/community_summary 365 天、person/fact 180 天、task 90 天、event/emotion 7 天、未知类型 180 天
+- 删除 `PROTECTED_DOMAINS` 域级「永不删」短路（会与显式 task=90 冲突，且会让一次性 event 被永久保护）
+- 遗忘判定改用每类型 `min_retain_days`；清理死常量 `MIN_RETAIN_DAYS`
+- `design.md §11.3` 措辞修正：「受保护/永不因时间被删」→「长窗口、但可遗忘」
+
+### v0.2.0 (2026-07-23)
+- **巩固算法重写（合并优先）**：先合并语义近邻（同域同型 + 标签近似或 token Jaccard≥0.5），再按类型化阈值遗忘
+- 修复原算法「先删后并」实际只删不并、且反向删除项目脉络的问题（原 dry-run 会删 85/105）
+- 连通分量降级为被动抽象层 `abstraction_clusters`，不再作为合并唯一依据
+- 新增 `consolidate --dry-run` 预览
+- status 展示重排：active_7d 提前；caps 标注为「安全阀，非物理容量」
+
+### v0.1.0 (2026-07-10)
+- 初始版本：图记忆引擎（抽取 / 回忆 / 巩固）
+- 五信号评分（valence/frequency/recency/access/centrality）驱动差异化遗忘
+- 软删除回收站（trashed 可恢复）
+- 声明仅支持 Apple Silicon（M 系列）
