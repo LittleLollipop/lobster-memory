@@ -228,6 +228,43 @@ class MemoryGraph:
         self._g.add_vertex(nid, props_to_dict(props))
         return nid
 
+    # ── Write: vertex upsert & edge ─────────────────────
+
+    def upsert_vertex(self, props: Dict[str, Any]) -> int:
+        """Upsert a vertex from a full props dict (preserves caller-set fields)."""
+        nid = str_to_id(props["id"])
+        props = dict(props)
+        props["updated_at"] = ts_now()
+        self._g.add_vertex(nid, props_to_dict(props))
+        return nid
+
+    def add_edge(
+        self,
+        from_id: str,
+        to_id: str,
+        kind: str,
+        weight: float = 1.0,
+        domain: str = "knowledge",
+        valence: float = 0.0,
+    ) -> Optional[Tuple[int, int]]:
+        """Add an edge if both vertices exist and the edge is new. Returns (from,to) or None."""
+        from_nid = str_to_id(from_id)
+        to_nid = str_to_id(to_id)
+        if self._g.get_vertex(from_nid) is None or self._g.get_vertex(to_nid) is None:
+            return None
+        if self._g.get_edge(from_nid, to_nid) is not None:
+            return None
+        self._g.add_edge(from_nid, to_nid, weight, {
+            "kind": kind,
+            "domain": domain,
+            "valence": valence,
+            "status": "live",
+            "weight": weight,
+            "created_at": ts_now(),
+            "updated_at": ts_now(),
+        })
+        return (from_nid, to_nid)
+
     # ── Read: Vertex ────────────────────────────────────
 
     def get_vertex(self, id_str: str) -> Optional[Dict[str, Any]]:

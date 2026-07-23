@@ -254,10 +254,13 @@ class MemorySession:
 
         return False
 
-    def consolidate(self) -> Dict[str, Any]:
+    def consolidate(self, dry_run: bool = False) -> Dict[str, Any]:
         """
-        Run consolidation (6-step pipeline).
-        Call this when should_consolidate() returns True.
+        Run consolidation (merge-first, type-aware pipeline).
+        Call this when should_consolidate() returns True, or with dry_run=True to preview.
+
+        Args:
+            dry_run: If True, compute the plan and return it WITHOUT mutating the graph.
 
         Returns:
             Consolidation report dict.
@@ -266,7 +269,10 @@ class MemorySession:
         cap = check_capacity(self._lm._graph)
         panic = cap == "hard"
 
-        report = consolidate(self._lm._graph, access_log, panic_mode=panic)
+        report = consolidate(self._lm._graph, access_log, panic_mode=panic, dry_run=dry_run)
+
+        if dry_run:
+            return report
 
         # Save report for next session's highlights
         self._last_consolidation_report = report
