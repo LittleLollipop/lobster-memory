@@ -603,11 +603,17 @@ consolidation_report = {
 1. **合并优先**:新流水线 `评分 → 合并 → 遗忘 → (panic 兜底)`。合并在遗忘之前,遗忘沦为兜底而非主动作。
 2. **连通分量 = 被动抽象层**:保留 `_connected_components`(结构连通簇),但**仅作为"归纳候选"提示**输出(`abstraction_clusters`),**不驱动合并**。合并决策必须由主动语义确认。
 3. **合并需主动语义确认**:collapse 条件 = 同域 + 同型 + (标签近似 或 内容/标签 token-Jaccard ≥ `COLLAPSE_THRESHOLD=0.5`)。删除了原 `struct_boosted`(同连通簇 + 0.10 重叠即并)分支——那是误并根源(曾把"lobster 图记忆技能"与"olares 提交者技能"误并,只因同含"技能/开发/WorkBuddy")。
-4. **类型化遗忘**:`TYPE_RETENTION` 按 type 定保留策略;`concept/person/fact/task` 及 `knowledge/task` 域**永不因时间被删**;仅 `emotion`(keep_low 0.30)、`event`(keep_low 0.20) 按阈值遗忘,且受 `MIN_RETAIN_DAYS=7` 保护窗口约束。直接回应"不是所有类型都该被时间遗忘"。
+4. **类型化遗忘(可被遗忘, 但阈值按抽象度区分)**:`TYPE_RETENTION` 中**所有类型 `forgettable=True`**——没有"永不因时间被删"的类型。区分两个旋钮:`keep_low`(归一化分数地板, sticky 类型统一极低 0.05)与 `min_retain_days`(休眠窗口)。原则 = **越抽象时间越长, 越具体时间越短**:
+   - 抽象层 `concept`/`community_summary` → 365 天
+   - `person`(用户指定 180) / `fact`(耐久知识档 180)
+   - 具体层 `task`(用户指定 90)
+   - 瞬态 `event`(0.20) / `emotion`(0.30) → 7 天, 且分数地板较高(易忘)
+   - `default`/`未知类型` → 180(保守 sticky, 避免误删)
+   - 删除了原 `PROTECTED_DOMAINS` 域级"永不删"短路(会强制 knowledge/task 域整体不可删, 与"可遗忘"矛盾);域判断不再钉死节点。直接回应"不是不能遗忘这些类型, 而是它们可接受更长时间的遗忘阈值"。
 
 **真实图验证**(125→102 live,合并 5 节点 + 遗忘 1 节点):
 - 合并簇:`skill_wb_lobster`←`wb_lobster_memory`(同技能重复);`fb_event_*`×4(自动反馈事件重复)。合并元信息存于 canonical 的 `merged_from` 字段,边重指向 canonical。
-- 遗忘:仅 `prefer_c_comparison`(emotion/emotion 低信号偏好节点)被软删;全部项目脉络受保护。
+- 遗忘:仅 `prefer_c_comparison`(emotion/emotion 低信号偏好节点)被软删;全部项目脉络受**长窗口保护**(当前图仅 ~10 天老, 全在窗口内, 短期不会被忘;长期休眠后才可能触发时间遗忘)。
 - 早先"85/105 反向 pruning"彻底消失。
 
 配套:`consolidate --dry-run`(runner)可在不改图前提下预览合并/遗忘计划;新增 `memory_graph.upsert_vertex` / `add_edge` 原语支撑合并重指向。

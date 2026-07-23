@@ -40,25 +40,29 @@ COLLAPSE_THRESHOLD = 0.50
 
 # ── Type-aware retention policy ────────────────────────
 #
-# 关键: 项目/知识脉络(concept/person/fact/task)永不因时间被删 —— 直接回应
-# "当前的节点绝大多数是要留的 / 不是所有类型都该被时间遗忘"。
-# 只有 transient 类型(emotion 偏好, event 一次性事件)按各自阈值遗忘。
+# 关键: 所有类型都可被遗忘(forgettable=True) —— 但"可被遗忘的阈值"按抽象度区分,
+# 直接回应"不是不能遗忘这些类型, 而是它们可接受更长时间的遗忘阈值":
+#   越抽象(概念/归纳摘要) → 分数地板极低 + 休眠窗口极长(极难被忘, 但最终仍会)
+#   越具体(任务/事实)    → 窗口较短
+#   瞬态(事件/情绪)      → 窗口最短、分数地板较高(易在休眠后被清)
+# 维度:
+#   keep_low        = 归一化分数地板(多低才算"不重要")
+#   min_retain_days = 休眠窗口(多久没被访问/更新才允许被时间遗忘)
 TYPE_RETENTION: Dict[str, Dict[str, Any]] = {
-    "concept":  {"forgettable": False, "keep_low": 0.0},   # 抽象/概念: 长期保留
-    "person":   {"forgettable": False, "keep_low": 0.0},   # 人物实体: 长期保留
-    "fact":     {"forgettable": False, "keep_low": 0.0},   # 事实: 长期保留
-    "task":     {"forgettable": False, "keep_low": 0.0},   # 项目脉络: 长期保留
-    "community_summary": {"forgettable": False, "keep_low": 0.0},  # 归纳摘要: 保留
-    "event":    {"forgettable": True,  "keep_low": 0.20},  # 一次性事件: 可遗忘
-    "emotion":  {"forgettable": True,  "keep_low": 0.30},  # 偏好/情绪: 可遗忘, 阈值高
+    # 抽象层: 最耐久
+    "concept":           {"forgettable": True, "keep_low": 0.05, "min_retain_days": 365},  # 抽象概念
+    "community_summary": {"forgettable": True, "keep_low": 0.05, "min_retain_days": 365},  # 归纳摘要
+    # 中等抽象: 长窗口(person 用户指定 180; fact 归入耐久档)
+    "person":            {"forgettable": True, "keep_low": 0.05, "min_retain_days": 180},  # 人物/画像
+    "fact":              {"forgettable": True, "keep_low": 0.05, "min_retain_days": 180},  # 事实(耐久知识)
+    # 具体层: 短窗口(task 用户指定 90)
+    "task":              {"forgettable": True, "keep_low": 0.05, "min_retain_days": 90},   # 项目脉络
+    # 瞬态层: 极短窗口 + 较高分数地板(易忘)
+    "event":             {"forgettable": True, "keep_low": 0.20, "min_retain_days": 7},    # 一次性事件
+    "emotion":           {"forgettable": True, "keep_low": 0.30, "min_retain_days": 7},    # 偏好/情绪
 }
-DEFAULT_TYPE_POLICY = {"forgettable": True, "keep_low": 0.30}
+DEFAULT_TYPE_POLICY = {"forgettable": True, "keep_low": 0.05, "min_retain_days": 180}
 
-# 受保护域: knowledge/task 域整体受保护(项目/知识脉络绝不因时间被删)
-PROTECTED_DOMAINS = {"knowledge", "task"}
-
-# 最近更新保护窗口(天): 窗口内节点不被时间遗忘
-MIN_RETAIN_DAYS = 7
 
 
 # ── Normalization (§5.3) ────────────────────────────────
@@ -292,15 +296,16 @@ def _collapse_group(graph: MemoryGraph, group_ids: List[str], score_of: Dict[str
 def _retention_policy(node: Dict[str, Any]) -> Dict[str, Any]:
     domain = node.get("domain")
     ntype = node.get("type")
+    # 引擎内部节点(无 domain/type, 如 root)不参与遗忘
     if domain is None or ntype is None:
-        return {"forgettable": False, "keep_low": 0.0, "reason": "引擎内部节点(受保护)"}
-    if domain in PROTECTED_DOMAINS:
-        return {"forgettable": False, "keep_low": 0.0, "reason": f"受保护域[{domain}]"}
+        return {"forgettable": False, "keep_low": 0.0, "min_retain_days": 9999,
+                "reason": "引擎内部节点(受保护)"}
     pol = TYPE_RETENTION.get(ntype, DEFAULT_TYPE_POLICY)
     return {
         "forgettable": pol["forgettable"],
         "keep_low": pol["keep_low"],
-        "reason": f"类型[{ntype}] forgettable={pol['forgettable']} keep_low={pol['keep_low']}",
+        "min_retain_days": pol["min_retain_days"],
+        "reason": f"类型[{ntype}] keep_low={pol['keep_low']} min_retain={pol['min_retain_days']}d",
     }
 
 
@@ -376,7 +381,7 @@ def consolidate(
                 continue
             if score < pol["keep_low"]:
                 days = ts_days_ago(v.get("updated_at") or v.get("last_accessed"))
-                if days <= MIN_RETAIN_DAYS:
+                if days <= pol["min_retain_days"]:
                     protected += 1
                     continue
                 trash_list.append(vid)
@@ -419,7 +424,7 @@ def consolidate(
             continue
         if score < pol["keep_low"]:
             days = ts_days_ago(v.get("updated_at") or v.get("last_accessed"))
-            if days <= MIN_RETAIN_DAYS:
+            if days <= pol["min_retain_days"]:
                 report["protected"] += 1
                 continue
             graph.set_status(vid, "trashed")
