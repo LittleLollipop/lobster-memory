@@ -510,6 +510,7 @@ fi
 3. **巩固评分权重**:§5.4 初始权重 w1~w5 是否需要预设具体值?
 4. **抽取器 few-shot 示例**:是否需要在 prompt 里加入具体对话→JSON 的样本?(建议至少 2 条,一条含 feedback,一条不含)
 5. **axolotl `add_vertex` 属性支持的最终形态** — 以你扩展后的实现为准。
+6. **容量显示与触发定位**(见 §11.3 张力段):`status` 的 "容量占用" 措辞误导(暗示物理上限)+ soft-delete 虚降坑;`integration.py` 中 consolidate 触发应从"容量优先"重定位为"轮次+质量门控为主、容量阈值纯兜底"。2026-07-14 拍板:**代码暂不动**,待图长至数百节点、consolidate 实际跑过几轮后再实施。**2026-07-23 已部分修复**:pruning 算法核心已重写(合并优先 + 类型化遗忘 + 语义合并确认,见 §11.3"已修复"段),反向 pruning 已消除;`status` 措辞诚实化与"健康度面板"仍**未做**(展示层,沿用暂不动决定)。
 
 ---
 
@@ -547,6 +548,71 @@ consolidation_report = {
 ### 11.3 容量约束
 
 见 §5.6 两级安全阀。`MEMORY_CAPS` 参数可在 `schema.py` 调整。底座统计(§2.6)的 `caps` 字段反馈当前使用率。
+
+#### 已知设计张力(2026-07-14 复盘)
+
+`status` 当前输出 `caps.vertex_pct = 节点数 / soft_vertex(15000)`,展示为 "容量占用 0.4%"。该字段存在三重误导,并指向一个更根本的触发定位问题:
+
+1. **"容量"措辞暗示物理上限**:15000 是拍脑袋的软策略线,非磁盘/内存物理容量,axolotl 真实可承载节点数远高于此。应改标签为 "软策略线 65/15000 (0.4%) — 非物理上限"。
+2. **soft-delete 虚降**:`caps` 分母仅计 live 顶点,而 trash 不缩减 AXEB 文件。大量 trash 后"占用"会虚降,给人"图变小很健康"的错觉。状态中应区分 live/trashed,或标注"标记删除不释放存储"。
+3. **指标无决策价值**:节点数/上限不回答"该不该遗忘"。真正的遗忘触发信号应是节点**质量**(低分/沉睡/孤立占比),而非图大小。
+
+#### 更根本:容量阈值的触发定位错位
+
+`integration.py` 中 consolidate 触发为"容量优先(超 soft 即强制)、轮次其次",等于把"逼近 15000"当主触发之一,与"遗忘促成长(应定期按质量剪,而非等图快满)"的哲学错位。正确定位:
+
+- `MEMORY_CAPS` 是**兜底安全阀**(仅 panic 兜底,防极端膨胀),**非主触发**;
+- 主触发应为 `consolidate_every=20` 轮 + **质量门控**(低分/沉睡节点占比超阈值才剪)。
+
+> **结论(2026-07-14 拍板):代码暂不动。** 先记录此分析,待图增长至数百节点、consolidate 实际跑过几轮、访问数据有积累后,再回头做:① status 措辞诚实化 + 堵 trash 虚降坑;② 健康度面板(沉睡/孤立/低分占比);③ consolidate 触发逻辑重定位(容量降级为纯兜底)。相关待办见 §10 第 6 条。
+
+#### 实证:首次 consolidate 的破坏性(2026-07-23 只读 dry-run)
+
+用户要求"尝试一次修剪"。为防误删,先做**只读 dry-run**(复刻 `consolidate()` 评分、不调用 `set_status`/`save`),当时图规模 105 节点。
+
+结果(远超预判):
+- **would TRASH = 85 / 105**(仅留 20 个 mid、0 个 high),score 范围 0.025–0.504,均值 0.247。
+- 幸存者几乎全是 `emotion`/`feedback` 偏好节点(如"讨厌不稳定工具""behavior反馈");**被删的恰恰是 task/knowledge 项目脉络节点**("仅支持 Apple Silicon""ClawHub Categories 填法"《告天》续写任务""面试离谱候选人"等)。
+
+根因(与 §10 第 6 条一致,但此处被量化证实):
+- 评分信号中,`valence`/`frequency(weight)`/`access` 三者在 young graph 上**分布极偏**:绝大多数节点 valence=0、weight=1.0(即 min)、access_count=0(从未 flush),min-max 归一化后这些节点拿到的不是 0.5,而是 **0**;只有少数 emotion/feedback 节点因 valence>0、weight>1、access>0 拿到高分。
+- 于是 `0.30·valence + 0.20·freq + 0.15·access` 三项几乎只对偏好节点有用,项目节点天然吃亏;叠加 recency/centrality 也偏低,大批项目节点跌破 `keep_low=0.3`。
+- **最危险的一点**:这恰好与用户"项目脉络 > 个人偏好"的优先级**相反**——首跑 consolidate 会删掉他想留的、留下他想淡化(persona)的。
+
+结论:
+1. **young graph 上绝不能跑当前 consolidate**——它会反向 pruning,且图越年轻越惨(访问数据零积累)。
+2. 触发逻辑必须改为**质量门控 + 最小保留**:在访问数据有积累、且低分节点确属"真噪声"前,consolidate 应是 no-op;并应加 `min_retain`(如保留最近 N 天更新 / 高 centrality 节点)。
+3. 已用 `memory.axeb.bak-20260723-105919` 备份;dry-run 未落盘,图未受损。
+4. 此实证把 §10 第 6 条从"理论风险"升级为"已验证阻断项",**优先级应上调**。
+
+#### 实证:合并步同样失效(2026-07-23 独立分析)
+
+用户提出"修剪应优先合并而非删除",并要求排查可合并节点。绕过 consolidate 门控,对全部 106 live 节点独立计算(结构邻居 Jaccard + 语义 token Jaccard):
+
+- **合并步在当前实现里是死代码**:`consolidate()` 仅在 `score >= keep_high(0.6)` 的节点上调用 `_detect_communities`(consolidator.py:227),而 young graph 任何节点都到不了 0.6 → 输入为空 → 合并永不触发。即"先删后并"实为"只删不并"。
+- **`_detect_communities` 是连通分量检测,非语义合并**:仅把已连边且簇≥3 的节点硬合并成 summary node,完全不比较内容/标签相似度。在中心-辐射型图里,它只会把"共享同一 hub、主题无关"的节点误判为可合并。
+- **独立语义分析结论**(语义为主重算):仅 **5 个真·合并簇(13 节点)** 值得合并——`skill_wb_lobster`↔`wb_lobster_memory`(标签近似);5 个 `fb_event_*` 反馈重复节点;`bench_petgraph_comparison`↔`petgraph_47x_advantage`(同一事实);`bench_large_scale`↔`RMAT_scale_21`(同一基准);`liu_chaoxiang`↔`resume_self_term_risk`(人物↔策略关联)。另有 **60 对纯结构同簇(共享 hub、主题无关)**——正是当前算法会误合并的陷阱,必须排除。
+- **修复方向(呼应 §10 第 6 条)**:修剪应"先合并、后删除";合并判定必须基于**语义冗余**(同域 + 内容/标签高重叠),而非结构连通性;合并门控应独立于 score,且不应要求簇≥3(2 节点冗余也要能合并)。
+
+可视化产物：`/tmp/graph_viz.html`(交互力导向图,合并簇金环高亮)、`/tmp/merge_candidates.md`、`/tmp/merge_pairs.md`、`/tmp/analyze_merge.py`。
+
+#### 已修复:合并优先 + 类型化遗忘(2026-07-23 落地, commit `132b937`)
+
+用户拍板四点要求,全部实现于 `engine/consolidator.py`(重写)、`engine/integration.py`、`engine/memory_graph.py`、`wb-lobster-memory/runner.py`:
+
+1. **合并优先**:新流水线 `评分 → 合并 → 遗忘 → (panic 兜底)`。合并在遗忘之前,遗忘沦为兜底而非主动作。
+2. **连通分量 = 被动抽象层**:保留 `_connected_components`(结构连通簇),但**仅作为"归纳候选"提示**输出(`abstraction_clusters`),**不驱动合并**。合并决策必须由主动语义确认。
+3. **合并需主动语义确认**:collapse 条件 = 同域 + 同型 + (标签近似 或 内容/标签 token-Jaccard ≥ `COLLAPSE_THRESHOLD=0.5`)。删除了原 `struct_boosted`(同连通簇 + 0.10 重叠即并)分支——那是误并根源(曾把"lobster 图记忆技能"与"olares 提交者技能"误并,只因同含"技能/开发/WorkBuddy")。
+4. **类型化遗忘**:`TYPE_RETENTION` 按 type 定保留策略;`concept/person/fact/task` 及 `knowledge/task` 域**永不因时间被删**;仅 `emotion`(keep_low 0.30)、`event`(keep_low 0.20) 按阈值遗忘,且受 `MIN_RETAIN_DAYS=7` 保护窗口约束。直接回应"不是所有类型都该被时间遗忘"。
+
+**真实图验证**(125→102 live,合并 5 节点 + 遗忘 1 节点):
+- 合并簇:`skill_wb_lobster`←`wb_lobster_memory`(同技能重复);`fb_event_*`×4(自动反馈事件重复)。合并元信息存于 canonical 的 `merged_from` 字段,边重指向 canonical。
+- 遗忘:仅 `prefer_c_comparison`(emotion/emotion 低信号偏好节点)被软删;全部项目脉络受保护。
+- 早先"85/105 反向 pruning"彻底消失。
+
+配套:`consolidate --dry-run`(runner)可在不改图前提下预览合并/遗忘计划;新增 `memory_graph.upsert_vertex` / `add_edge` 原语支撑合并重指向。
+
+> 注:`status` 的 "软策略线 65/15000" 措辞诚实化(§11.3 第 1 点)与"健康度面板"(第 3 点)**仍未做**——本次修复聚焦 pruning 算法本身,措辞/面板属展示层,沿用 2026-07-14"代码暂不动展示层"的搁置决定。
 
 ---
 
