@@ -44,6 +44,7 @@ import argparse
 import json
 import os
 import sys
+from collections import deque
 
 SKILL_ENGINE = os.environ.get(
     "LOBSTER_MEMORY_ENGINE", "/Users/sai/.workbuddy/skills/lobster-memory"
@@ -71,11 +72,45 @@ def _resolve_default_db():
 DEFAULT_DB = _resolve_default_db()
 
 
-# ── 只读辅助：全量枚举（pagerank 兜底，list_vertices 会漏只有入边的节点） ──
+# ── 只读辅助：全量枚举 ──
+def _all_vertex_ids(g):
+    """可靠枚举所有「参与边的顶点」：从 lobster_root 出发，沿出/入边双向 BFS；
+    另用 pagerank 键做二次播种，覆盖 root 不可达的高权重节点。
+
+    之所以不能只靠 pagerank：纯汇点（只有入边）在 pagerank 里权重≈0，可能被漏，
+    其上的重边就查不出来（已踩过 新书 ch020 漏检的坑）。双向 BFS 当且仅当图连通
+    时覆盖全部；完全孤立（无边且无 root 边）的顶点两种法都枚举不到，但它们无边，
+    不影响 scan-dups / get / dump 的边正确性，此处接受该限制。
+    """
+    seeds = []
+    root = _sid("lobster_root")
+    if g.get_vertex(root) is not None:
+        seeds.append(root)
+    try:
+        for nid in g.pagerank().keys():
+            seeds.append(nid)
+    except Exception:
+        pass
+    visited = set()
+    q = deque(seeds)
+    while q:
+        n = q.popleft()
+        if n in visited:
+            continue
+        visited.add(n)
+        for m in g.out_neighbors(n):
+            if m not in visited:
+                q.append(m)
+        for m in g.in_neighbors(n):
+            if m not in visited:
+                q.append(m)
+    return visited
+
+
 def all_nodes(g):
     seen = {}
-    for k in g.pagerank().keys():
-        v = g.get_vertex(k)
+    for nid in _all_vertex_ids(g):
+        v = g.get_vertex(nid)
         if v:
             d = dict_from_props(dict(v))
             seen[d.get("id")] = d
@@ -173,6 +208,9 @@ def do_edge_add(mg, frm, to, kind, weight=1.0, domain="knowledge", replace=False
 
 def do_edge_set_kind(mg, frm, to, kind, weight=None, domain=None):
     if _count_pair(mg, frm, to) == 0:
+        return f"跳过：边不存在 {frm} -> {to}"
+    e = mg._g.get_edge(_sid(frm), _sid(to))
+    if e is None:
         return f"跳过：边不存在 {frm} -> {to}"
     ed = dict_from_props(dict(e[1]))
     old_w = ed.get("weight", 1.0)
