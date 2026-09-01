@@ -140,6 +140,8 @@ session.close()  # 保存 + 关闭
 lobster-memory/
 ├── SKILL.md              ← 你正在看的
 ├── install.sh            ← 一键安装(wheel 优先)
+├── tools/
+│   └── graph_crud.py     ← 图库通用 CLI(唯一写入口,见下)
 ├── engine/
 │   ├── integration.py    ← MemorySession(接入层,从这里开始)
 │   ├── base.py           ← LobsterMemory(底层 API)
@@ -149,6 +151,32 @@ lobster-memory/
 │   ├── consolidator.py   ← 巩固引擎(6步流水线)
 │   └── schema.py         ← 常量/枚举/容量参数
 ```
+
+## 图库 CLI 工具（`tools/graph_crud.py`）
+
+所有图库增删改查只走这**一个入口**，禁止再为某个图库单独写临时 `.py`。
+
+```bash
+# 必须在 lobster-memory venv 下运行
+PY=~/.workbuddy/venvs/lobster-memory/bin/python
+
+# 默认库 = 调用时所在项目的 .memory-graph/memory.axeb；
+# 也可用 --db <path> 显式指定任意库，或设环境变量 LOBSTER_DB。
+# 项目里推荐把 tools/graph_crud.py 软链到本文件，避免多份副本漂移。
+
+$PY tools/graph_crud.py scan-dups                 # 重边体检(全图 0 平行边才算健康)
+$PY tools/graph_crud.py get <id>                  # 查节点 + 出/入边(kind/weight)
+$PY tools/graph_crud.py upsert <id> --label L --content C
+$PY tools/graph_crud.py edge add <from> <to> --kind K --weight W
+$PY tools/graph_crud.py edge set-kind <from> <to> --kind K
+$PY tools/graph_crud.py edge rm <from> <to>
+$PY tools/graph_crud.py bulk ops.json             # 批量:JSON 数组,见文件头文档
+```
+
+**铁律（踩坑固化）**：
+- 写操作一律走 `MemoryGraph` 封装层，绝不碰底层 `mg._g.add_edge`（对同 (src,dst) 是「替换+复制」语义，会损坏图）。
+- 图是简单有向图：每对 (src→dst) 至多一条边；要改 kind 用 `edge set-kind`，多语义关系写进节点 content/边属性或绕中间节点。
+- `add` 默认幂等：已存在同 kind 边则跳过；底层偶发双写由 `_ensure_single` 去重兜底。
 
 ## 依赖
 
