@@ -265,6 +265,145 @@ def do_bulk(mg, path):
     return log
 
 
+# ── 设定下沉校验（治「上热下冷」：设定层改了，章纲没跟着改） ──
+import re as _re
+
+DEFAULT_CHAPTER_RE = r"^ch\d{3,}$"
+
+
+def _chapter_ids(nodes, pattern=DEFAULT_CHAPTER_RE):
+    rx = _re.compile(pattern)
+    return sorted([i for i in nodes if rx.match(i)], key=lambda x: (x, int("".join(filter(str.isdigit, x)) or 0)))
+
+
+def extract_terms(content):
+    """从设定节点 content 抽关键词候选：【】标题、引号短语、反引号片段、破折号后短句。"""
+    terms = set()
+    for m in _re.finditer(r"【([^】]{2,14})】", content):
+        terms.add(m.group(1))
+    for m in _re.finditer(r"[「『“\"]([^」』”\"]{2,14})[」』”\"]", content):
+        terms.add(m.group(1))
+    for m in _re.finditer(r"`([^`]{2,24})`", content):
+        terms.add(m.group(1))
+    for m in _re.finditer(r"『([^』]{2,14})』", content):
+        terms.add(m.group(1))
+    return {t.strip() for t in terms if 2 <= len(t.strip()) <= 14}
+
+
+def do_impact(mg, node_id, kws=None, depth=2, chapter_re=DEFAULT_CHAPTER_RE, hub_degree=15):
+    """列出「改动此设定节点」受影响的章号清单。
+    A 组 = 边可达（depth 跳内，双向）；B 组 = 内容关键词命中（最易漏，重点看）。"""
+    g = mg._g
+    nodes = all_nodes(g)
+    edges = all_edges(g)
+    chapters = set(_chapter_ids(nodes, chapter_re))
+    if node_id not in nodes:
+        return [f"节点不存在: {node_id}"]
+
+    # A 组：双向 BFS（hub 只作终点，不作中转——否则经 lobster_root/act 两跳即全图）
+    adj = {}
+    for s, d2, k, w, dm, st in edges:
+        adj.setdefault(s, set()).add(d2)
+        adj.setdefault(d2, set()).add(s)
+    degree = {n: len(v) for n, v in adj.items()}
+    hub = {n for n, d in degree.items() if d >= hub_degree} | {"lobster_root"}
+    seen, frontier = {node_id}, {node_id}
+    linked = set()
+    for _ in range(max(1, depth)):
+        nxt = set()
+        for n in frontier:
+            for m in adj.get(n, ()):
+                if m in seen:
+                    continue
+                seen.add(m)
+                if m in chapters:
+                    linked.add(m)
+                if m not in hub:      # hub 可达但不扩散
+                    nxt.add(m)
+        frontier = nxt
+        if not frontier:
+            break
+
+    # B 组：关键词命中
+    terms = set(kws or [])
+    if not kws:
+        cand = extract_terms(nodes[node_id].get("content") or "")
+        terms = {t for t in cand if any(t in (nodes[c].get("content") or "") for c in chapters)}
+    hit = {}
+    for c in chapters:
+        ctext = (nodes[c].get("content") or "") + (nodes[c].get("label") or "")
+        ms = [t for t in terms if t in ctext]
+        if ms:
+            hit[c] = ms
+
+    out = []
+    out.append(f"# impact: {node_id} （{nodes[node_id].get('label','')}）")
+    out.append(f"关键词: {sorted(terms) if terms else '(无自动抽取，请用 --kw 指定)'}")
+    out.append("")
+    out.append(f"## A 组 · 边可达章节（{len(linked)}）— 必须逐章核对")
+    out.extend(f"  {c} | {nodes[c].get('label','')[:40]}" for c in sorted(linked))
+    if not linked:
+        out.append("  （无）")
+    out.append("")
+    out.append(f"## B 组 · 内容关键词命中（{len(hit)}）— 无边相连，最易漏")
+    for c in sorted(hit):
+        out.append(f"  {c} | {nodes[c].get('label','')[:32]} | 命中: {'、'.join(hit[c])}")
+    if not hit:
+        out.append("  （无）")
+    out.append("")
+    allch = sorted(linked | set(hit))
+    out.append(f"## 受影响章号清单（并集 {len(allch)}）")
+    out.append("  " + " ".join(allch) if allch else "  （空）")
+    return out
+
+
+def do_sink_check(mg, stale, ok=None, chapter_re=DEFAULT_CHAPTER_RE):
+    """下沉校验：扫章节节点，报「仍写旧口径」/「已写新口径」/「无关」。
+    stale=应被替换的旧措辞（可多个）；ok=新口径关键词（可多个）。"""
+    g = mg._g
+    nodes = all_nodes(g)
+    chapters = _chapter_ids(nodes, chapter_re)
+    stale = [s for s in stale if s]
+    ok = [o for o in (ok or []) if o]
+    bad, good, none_ = [], [], []
+    for c in chapters:
+        text = (nodes[c].get("content") or "") + (nodes[c].get("label") or "")
+        has_stale = [s for s in stale if s in text]
+        has_ok = [o for o in ok if o in text]
+        if has_stale:
+            bad.append((c, has_stale, has_ok))
+        elif has_ok:
+            good.append((c, has_ok))
+        else:
+            none_.append(c)
+
+    out = []
+    out.append(f"# sink-check  staled={stale}  ok={ok}")
+    out.append("")
+    out.append(f"## ❌ 仍写旧口径（{len(bad)}）— 必须改")
+    for c, hs, ho in bad:
+        tag = f"  (已含新口径: {'、'.join(ho)})" if ho else ""
+        out.append(f"  {c} | {nodes[c].get('label','')[:32]} | 旧词: {'、'.join(hs)}{tag}")
+    if not bad:
+        out.append("  ✅ 无残留")
+    out.append("")
+    out.append(f"## ✅ 已写新口径（{len(good)}）")
+    for c, ho in good:
+        out.append(f"  {c} | {'、'.join(ho)}")
+    if not good:
+        out.append("  （无）")
+    out.append("")
+    out.append(f"## ○ 未提及（{len(none_)}）— 人工判断是否相关")
+    if none_:
+        out.append("  " + " ".join(none_[:20]) + ("  …" if len(none_) > 20 else ""))
+    else:
+        out.append("  （无）")
+    out.append("")
+    verdict = "PASS：无旧口径残留" if not bad else f"FAIL：{len(bad)} 章仍写旧口径"
+    out.append(f"结论: {verdict}")
+    return out, (1 if bad else 0)
+
+
 def main():
     p = argparse.ArgumentParser(description="《有事钟无艳》图库 CLI")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -308,6 +447,26 @@ def main():
 
     sp = sub.add_parser("bulk", help="批量执行 JSON 操作文件")
     add_db(sp); sp.add_argument("file")
+
+    sp = sub.add_parser(
+        "impact",
+        help="设定下沉·影响面：列出改动某设定节点受影响的章号清单（A=边可达 B=内容命中）")
+    add_db(sp); sp.add_argument("id")
+    sp.add_argument("--kw", action="append", default=[],
+                    help="关键词（可多个）；不给则自动从节点 content 抽取")
+    sp.add_argument("--depth", type=int, default=2, help="边可达跳数，默认 2")
+    sp.add_argument("--hub-degree", type=int, default=15,
+                    help="度数≥该值视为枢纽，可作终点但不中转（防两跳连通全图），默认 15")
+    sp.add_argument("--chapter-re", default=DEFAULT_CHAPTER_RE, help="章节点 id 正则")
+
+    sp = sub.add_parser(
+        "sink-check",
+        help="设定下沉·校验：扫章节报「仍写旧口径 / 已写新口径 / 未提及」")
+    add_db(sp)
+    sp.add_argument("--stale", action="append", default=[], required=True,
+                    help="应被替换的旧措辞（可多个）")
+    sp.add_argument("--ok", action="append", default=[], help="新口径关键词（可多个）")
+    sp.add_argument("--chapter-re", default=DEFAULT_CHAPTER_RE, help="章节点 id 正则")
 
     args = p.parse_args()
     if args.db is None:
@@ -404,6 +563,17 @@ def main():
     elif args.cmd == "bulk":
         for line in do_bulk(mg, args.file):
             print(line)
+
+    elif args.cmd == "impact":
+        for line in do_impact(mg, args.id, args.kw or None, args.depth, args.chapter_re, args.hub_degree):
+            print(line)
+
+    elif args.cmd == "sink-check":
+        lines, code = do_sink_check(mg, args.stale, args.ok or None, args.chapter_re)
+        for line in lines:
+            print(line)
+        mg.close()
+        sys.exit(code)   # 有残留则非零退出，便于脚本/自动化门禁
 
     mg.close()
 

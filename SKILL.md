@@ -1,7 +1,7 @@
 ---
 name: lobster-memory
 description: 基于知识图谱的 AI 长期记忆引擎（实体-关系-情绪 valence），支持自动抽取、因果边、递归自成长抽取与可观察的遗忘巩固。底层由 axolotl_rs (Rust 图存储) 驱动。
-version: 0.2.2
+version: 0.2.3
 author: Sai
 triggers:
   - "长期记忆"
@@ -58,6 +58,26 @@ requires:
 2. **一致性校验 = 写校验器跑规则**，不是人肉读库：把「冲突模式」转成结构化查询（ch→单元映射 vs 总规划、plan 衔接链、角色登场 vs 引用章、时间线衔接词等），校验器只取需要字段、只报差异，几百章/几千节点都秒级。
 3. **字段语义全局统一**：同名字段不同时期写法可能语义不同（如 plan「衔接chXXX」早期=预告下章、后期=承接上章）→ 统一语义，让校验器兜底检测。
 4. 判定标准：能写成查询的校验，不靠人读；人工只处理查询结果（差异清单），不读原始数据。
+
+### ⑦ 设定下沉纪律（治「上热下冷」，**硬纪律**）
+> **病状**：设定层（rule_* / chr_* / concept_* 等真相源节点）改对了，章纲层（chXXX）还是旧口径。
+> 典型病例：`chr_shadow` 已写「她不是挡路石头，是宣王的认真开关」，`ch037` 仍写「挡路被碾的石头」；
+> `rule_shadow_mechanism` 已禁「影子调兵」，`ch063/ch070` 仍写「兵变」。
+> **成因**：改设定时靠记忆去想「哪些章会受影响」——必漏。清单必须由工具算，不能靠想。
+
+1. **每次改动设定层节点，必须先跑 `impact` 列出受影响章号清单，并把清单贴给用户**——不是建议，是纪律。没跑 impact 就报「已修复」，视为未完成。
+2. **清单分两组**：A 组=边可达章节（必须逐章核对）；B 组=内容关键词命中但**无边相连**的章节（最易漏，重点看——上面的 `ch063/ch070` 就只在 B 组）。
+3. **逐章改完必须跑 `sink-check` 验收**（旧措辞 → 新口径）：`--stale` 传应被替换的旧词，`--ok` 传新口径关键词。**exit 0 才算完成**；非零即仍有章未下沉，继续改。
+4. 禁止「改完设定层即报完成」。设定层正确 ≠ 章纲正确，下沉没验收等于没改。
+5. 新增红线/改名/改口径时，把新旧措辞一并写进 `rule_*` 节点，方便日后 `sink-check` 直接取词。
+
+```bash
+# 1) 影响面：我这次改动会波及哪些章
+$PY tools/graph_crud.py impact chr_shadow --kw 兵变 --kw 挡路 --kw 石头 --kw 认真开关
+# 2) 逐章改（走 bulk），改完验收：旧词是否清干净、新词是否已下沉
+$PY tools/graph_crud.py sink-check --stale 兵变 --stale 挡路被碾的石头 --ok 造条件 --ok 认真开关
+#    → 结论 PASS (exit 0) 才算收工；FAIL (exit 1) 继续改
+```
 
 ## Python 环境
 
@@ -171,6 +191,8 @@ $PY tools/graph_crud.py edge add <from> <to> --kind K --weight W
 $PY tools/graph_crud.py edge set-kind <from> <to> --kind K
 $PY tools/graph_crud.py edge rm <from> <to>
 $PY tools/graph_crud.py bulk ops.json             # 批量:JSON 数组,见文件头文档
+$PY tools/graph_crud.py impact <id> [--kw K]...   # 设定下沉:受影响章号清单(改设定必跑)
+$PY tools/graph_crud.py sink-check --stale 旧词 --ok 新词   # 下沉验收:exit 0 才算完成
 ```
 
 **铁律（踩坑固化）**：
