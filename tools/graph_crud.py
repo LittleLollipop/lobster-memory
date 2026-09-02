@@ -357,21 +357,63 @@ def do_impact(mg, node_id, kws=None, depth=2, chapter_re=DEFAULT_CHAPTER_RE, hub
     return out
 
 
+NEG_CUES = ("不是", "并非", "禁写", "不写", "没有", "严禁", "避免", "不能", "不再",
+            "别写", "禁用", "删掉", "改掉", "旧稿", "原写", "原稿", "已纠正", "纠正", "勿")
+
+
+NEG_WINDOW = 80  # 小句最大回看长度（防超长句），非判定窗口
+
+
+def _negated(text, term, window=NEG_WINDOW):
+    """term 在 text 中的每一次出现是否都处于否定语境（『不是X』『禁写X』『旧稿X』）。
+    全部被否定 → True（视为已纠正）；存在任一次未被否定 → False（视为残留）。
+    偏保守：宁可误报 FAIL，不可误判 PASS。
+
+    判定边界 = 小句（term 之前最近句读之后），**不是固定字数**——
+    「禁写「影子调兵／影子下令／影子发动兵变」」这类列举式，
+    否定词与 term 相隔十余字，固定 window 永远够不到；
+    而若 window 放大到跨句，又会把下一句一次独立的出现误判成否定。
+    小句边界同时解决这两个问题。"""
+    start, n = 0, 0
+    while True:
+        i = text.find(term, start)
+        if i < 0:
+            break
+        n += 1
+        clause = text[max(0, i - window): i]
+        cut = -1
+        for sep in "。！？；，\n":
+            k = clause.rfind(sep)
+            if k > cut:
+                cut = k
+        if cut >= 0:
+            clause = clause[cut + 1:]
+        if not any(cue in clause for cue in NEG_CUES):
+            return False
+        start = i + len(term)
+    return n > 0
+
+
 def do_sink_check(mg, stale, ok=None, chapter_re=DEFAULT_CHAPTER_RE):
-    """下沉校验：扫章节节点，报「仍写旧口径」/「已写新口径」/「无关」。
+    """下沉校验：扫章节节点，报「仍写旧口径」/「已纠正(否定语境)」/「已写新口径」/「无关」。
     stale=应被替换的旧措辞（可多个）；ok=新口径关键词（可多个）。"""
     g = mg._g
     nodes = all_nodes(g)
     chapters = _chapter_ids(nodes, chapter_re)
     stale = [s for s in stale if s]
     ok = [o for o in (ok or []) if o]
-    bad, good, none_ = [], [], []
+    bad, good, none_, neg = [], [], [], []
     for c in chapters:
         text = (nodes[c].get("content") or "") + (nodes[c].get("label") or "")
         has_stale = [s for s in stale if s in text]
         has_ok = [o for o in ok if o in text]
         if has_stale:
-            bad.append((c, has_stale, has_ok))
+            # 旧词命中：区分「真残留」与「否定语境引用」（如「她不是挡路被碾的石头」）
+            real = [s for s in has_stale if not _negated(text, s)]
+            if real:
+                bad.append((c, real, has_ok))
+            else:
+                neg.append((c, has_stale, has_ok))
         elif has_ok:
             good.append((c, has_ok))
         else:
@@ -387,6 +429,13 @@ def do_sink_check(mg, stale, ok=None, chapter_re=DEFAULT_CHAPTER_RE):
     if not bad:
         out.append("  ✅ 无残留")
     out.append("")
+    out.append(f"## ⚠️ 已纠正·否定语境引用（{len(neg)}）— 人工确认后放过")
+    for c, hs, ho in neg:
+        tag = f"  (另含新口径: {'、'.join(ho)})" if ho else ""
+        out.append(f"  {c} | {nodes[c].get('label','')[:32]} | 旧词仅出现于否定句: {'、'.join(hs)}{tag}")
+    if not neg:
+        out.append("  （无）")
+    out.append("")
     out.append(f"## ✅ 已写新口径（{len(good)}）")
     for c, ho in good:
         out.append(f"  {c} | {'、'.join(ho)}")
@@ -400,12 +449,57 @@ def do_sink_check(mg, stale, ok=None, chapter_re=DEFAULT_CHAPTER_RE):
         out.append("  （无）")
     out.append("")
     verdict = "PASS：无旧口径残留" if not bad else f"FAIL：{len(bad)} 章仍写旧口径"
+    if neg:
+        verdict += f"（另有 {len(neg)} 章为否定语境引用，需人工确认）"
     out.append(f"结论: {verdict}")
     return out, (1 if bad else 0)
 
 
+# 否定语境识别回归用例（每条都是真实踩过的坑，删改 _negated 后必须全绿）
+NEG_CASES = [
+    # (文本, term, 期望 _negated 返回值)
+    ("她不是挡路被碾的石头，她是认真开关", "挡路被碾的石头", True),
+    ("不写真刀真枪的大规模战争", "真刀真枪", True),
+    ("她就是挡路被碾的石头", "挡路被碾的石头", False),
+    ("正面挡路被碾的石头，然后兵变", "挡路被碾的石头", False),
+    ("旧稿写了我兄，已纠正", "我兄", True),
+    ("我兄有远志，非齐鲁可留", "我兄", False),
+    # 小句边界：一句被否定，另一句独立出现 → 整体仍算残留
+    ("不写真刀真枪。另外真刀真枪地打", "真刀真枪", False),
+    ("不写真刀真枪，但这场戏真刀真枪", "真刀真枪", False),
+    ("禁用晏婴", "晏婴", True),
+    ("晏婴解梦可借鉴", "晏婴", False),
+    ("", "晏婴", False),
+    ("她不是挡路被碾的石头，也不是谗臣的爪牙", "挡路被碾的石头", True),
+    # 列举式：否定词与 term 相隔十余字，固定 window 永远够不到 → 靠小句边界
+    ("禁写「影子调兵／影子下令／影子发动兵变」", "兵变", True),
+    ("禁写「他下令兵变」", "兵变", True),
+    ("他下令兵变，朝野震动", "兵变", False),
+    # 禁令在别的小句 → 不得外溢
+    ("禁写。\n兵变发生了", "兵变", False),
+    ("兵变。禁写兵变", "兵变", False),
+    ("禁写兵变。兵变", "兵变", False),
+]
+
+
+def do_selftest():
+    """否定语境识别自检——sink-check 的判据本身必须先被校验，
+    否则工具一误报，人就会开始跳过它，下沉纪律随即作废。"""
+    out = ["# selftest  _negated 否定语境识别", ""]
+    bad = 0
+    for i, (text, term, want) in enumerate(NEG_CASES, 1):
+        got = _negated(text, term)
+        if got != want:
+            bad += 1
+            out.append(f"  ✗ #{i:02d} term={term!r} want={want} got={got} | {text!r}")
+    out.append("")
+    out.append(f"用例 {len(NEG_CASES)} 条，失败 {bad} 条")
+    out.append(f"结论: {'PASS' if bad == 0 else 'FAIL：_negated 判定回归'}")
+    return out, (1 if bad else 0)
+
+
 def main():
-    p = argparse.ArgumentParser(description="《有事钟无艳》图库 CLI")
+    p = argparse.ArgumentParser(description="lobster-memory 图库 CLI（通用，跨书复用）")
     sub = p.add_subparsers(dest="cmd", required=True)
 
     def add_db(sp):
@@ -459,9 +553,11 @@ def main():
                     help="度数≥该值视为枢纽，可作终点但不中转（防两跳连通全图），默认 15")
     sp.add_argument("--chapter-re", default=DEFAULT_CHAPTER_RE, help="章节点 id 正则")
 
+    sp = sub.add_parser("selftest", help="工具自检：否定语境识别回归用例（不需要图库）")
+
     sp = sub.add_parser(
         "sink-check",
-        help="设定下沉·校验：扫章节报「仍写旧口径 / 已写新口径 / 未提及」")
+        help="设定下沉·校验：扫章节报「仍写旧口径 / 已纠正(否定语境) / 已写新口径 / 未提及」")
     add_db(sp)
     sp.add_argument("--stale", action="append", default=[], required=True,
                     help="应被替换的旧措辞（可多个）")
@@ -469,6 +565,10 @@ def main():
     sp.add_argument("--chapter-re", default=DEFAULT_CHAPTER_RE, help="章节点 id 正则")
 
     args = p.parse_args()
+    if args.cmd == "selftest":
+        lines, code = do_selftest()
+        print("\n".join(lines))
+        sys.exit(code)
     if args.db is None:
         sys.stderr.write(
             "未指定图库路径：请在含 .memory-graph/memory.axeb 的项目目录下运行，"
