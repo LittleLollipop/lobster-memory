@@ -250,6 +250,13 @@ $PY tools/graph_crud.py selftest                            # 工具自检:否�
 - 写操作一律走 `MemoryGraph` 封装层，绝不碰底层 `mg._g.add_edge`（对同 (src,dst) 是「替换+复制」语义，会损坏图）。
 - 图是简单有向图：每对 (src→dst) 至多一条边；要改 kind 用 `edge set-kind`，多语义关系写进节点 content/边属性或绕中间节点。
 - `add` 默认幂等：已存在同 kind 边则跳过；底层偶发双写由 `_ensure_single` 去重兜底。
+- **bulk 字段名有两个别名坑，均已兼容，但仍优先用第一种**：`status` op 认 `status`/`value`；
+  `edge_*` op 认 `from`/`to` 与 `src`/`dst`。写错时旧版只抛裸 `TypeError: None + str`，
+  看不出是字段名问题——已修为可读报错（`<缺 id / from-src / to-dst>`）。
+- **⚠️ upsert 是整段替换，写 bulk 前必须用 `get` 取回原文再追加**。
+  凭印象重编 content 会静默删掉已有细纲（实测：ch032 有截话伏笔/H3宣王在场/淳于髡状态三段，
+  ch095 有【下沉豁免】标记——整段替换一次全没）。正确姿势：原文完整保留 + 末尾追加新段，
+  JSON 写完先量字数，应**大于**原文。
 
 ## 依赖
 

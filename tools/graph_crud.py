@@ -268,20 +268,26 @@ def do_bulk(mg, path):
     for i, op in enumerate(ops):
         try:
             kind = op.get("op")
+            # 端点字段名兼容：edge_* 支持 from/to 与 src/dst 两种写法。
+            # 旧版只认 from/to，写 src/dst 时日志行抛 TypeError（None+str），
+            # 报错信息完全看不出是字段名问题——属「工具难用人就绕过去」的典型
+            # （与 status/value 同款，见下）。
+            frm = op.get("from") or op.get("src")
+            to = op.get("to") or op.get("dst")
             if kind == "upsert":
                 r = do_upsert(mg, op["id"], op["label"], op.get("content", ""),
                               op.get("type", "concept"), op.get("domain", "knowledge"),
                               float(op.get("weight", 1.0)))
             elif kind == "edge_add":
-                r = do_edge_add(mg, op["from"], op["to"], op["kind"],
+                r = do_edge_add(mg, frm, to, op["kind"],
                                 float(op.get("weight", 1.0)), op.get("domain", "knowledge"),
                                 op.get("replace", False))
             elif kind == "edge_set_kind":
-                r = do_edge_set_kind(mg, op["from"], op["to"], op["kind"],
+                r = do_edge_set_kind(mg, frm, to, op["kind"],
                                      float(op["weight"]) if "weight" in op else None,
                                      op.get("domain"))
             elif kind == "edge_rm":
-                r = do_edge_rm(mg, op["from"], op["to"])
+                r = do_edge_rm(mg, frm, to)
             elif kind == "status":
                 # 兼容两种写法：{"status": "frozen"} 与 {"value": "frozen"}。
                 # CLI 子命令用位置参数（status <id> <value>），写 bulk 时极易顺手写 value，
@@ -296,7 +302,8 @@ def do_bulk(mg, path):
                 r = f"未知 op: {kind}"
         except Exception as ex:
             r = f"异常: {ex}"
-        log.append(f"[{i}] {op.get('op')} {op.get('id') or (op.get('from')+'->'+op.get('to'))} => {r}")
+        who = op.get("id") or (f"{frm}->{to}" if frm and to else "<缺 id / from-src / to-dst>")
+        log.append(f"[{i}] {kind} {who} => {r}")
     return log
 
 
