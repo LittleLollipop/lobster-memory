@@ -43,6 +43,11 @@ bulk 文件格式示例（ops 顺序执行，失败不中断，末尾汇总）:
     两者不一致极易写混）。现已同时兼容 value，缺字段时给明确报错而非 KeyError。
   - ⚠️ upsert 会把 status 重置为 live：被冻结/退役节点在本批 upsert 全部跑完后，
     最后再跑一次 `status <id> frozen|inactive` 补回（这也是 bulk 里 status op 常放末尾的原因）。
+  - ⚠️ **写 bulk 用 Write 一次成型，不要用 Edit 往数组里追加元素**：追加时需匹配上一个元素
+    的结尾（多为 `...。"\n  }`），而多个节点的 content 常常以同一句收尾（如口径注），
+    匹配不唯一就会失败；换更长上下文又极易粘到错误位置，把 JSON 写坏。
+    元素多就分段写成多个 json 分次 bulk，或用脚本 json.load → append → json.dump。
+    落库前一律先 `python -c "import json;json.load(open(f))"` 校验。
 """
 import argparse
 import json
