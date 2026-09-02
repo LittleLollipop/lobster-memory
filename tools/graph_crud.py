@@ -39,6 +39,10 @@ bulk 文件格式示例（ops 顺序执行，失败不中断，末尾汇总）:
 注意:
   - 库路径默认取脚本所在项目的 .memory-graph/memory.axeb（或环境变量 LOBSTER_DB），可用 --db 覆盖任意子命令。
   - 本工具是唯一写入口；任何新需求先想「能不能用现有命令/写个 bulk JSON」，不要新开 .py。
+  - status op 的字段名是 **status**（不是 value；CLI 子命令 status <id> <STATUS> 才是位置参数，
+    两者不一致极易写混）。现已同时兼容 value，缺字段时给明确报错而非 KeyError。
+  - ⚠️ upsert 会把 status 重置为 live：被冻结/退役节点在本批 upsert 全部跑完后，
+    最后再跑一次 `status <id> frozen|inactive` 补回（这也是 bulk 里 status op 常放末尾的原因）。
 """
 import argparse
 import json
@@ -256,7 +260,15 @@ def do_bulk(mg, path):
             elif kind == "edge_rm":
                 r = do_edge_rm(mg, op["from"], op["to"])
             elif kind == "status":
-                r = do_status(mg, op["id"], op["status"])
+                # 兼容两种写法：{"status": "frozen"} 与 {"value": "frozen"}。
+                # CLI 子命令用位置参数（status <id> <value>），写 bulk 时极易顺手写 value，
+                # 旧版只认 status 且报错仅一句 KeyError，属「工具难用人就绕过去」的典型。
+                sv = op.get("status") or op.get("value")
+                if not sv:
+                    r = ("status op 缺字段：需 op['status'] 或 op['value']"
+                         "（取值 live / inactive / frozen）")
+                else:
+                    r = do_status(mg, op["id"], sv)
             else:
                 r = f"未知 op: {kind}"
         except Exception as ex:
