@@ -66,12 +66,30 @@ from engine.schema import ts_now, default_node_props, dict_from_props, props_to_
 BASE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # 项目根（脚本所在 tools/ 的上两级）
 
 
+def _find_up(start, target=".memory-graph/memory.axeb"):
+    """从 start 逐级向上找 target，找到返回绝对路径，到根为止返回 None。"""
+    cur = os.path.abspath(start)
+    while True:
+        cand = os.path.join(cur, *target.split("/"))
+        if os.path.exists(cand):
+            return cand
+        parent = os.path.dirname(cur)
+        if parent == cur:
+            return None
+        cur = parent
+
+
 def _resolve_default_db():
-    """默认库路径解析：优先脚本所在项目下的 .memory-graph/memory.axeb；
-    其次环境变量 LOBSTER_DB；都没有则返回 None（由调用方要求显式 --db，禁止凭空新建）。"""
+    """默认库路径解析顺序：① 脚本所在项目根（软链 tools/graph_crud.py 的常见情形）；
+    ② 当前工作目录逐级向上找（**从技能目录直接调真实路径时的救命分支**——
+       此时 BASE 指向技能根，那里没有 .memory-graph，旧版只会报「未指定图库路径」）；
+    ③ 环境变量 LOBSTER_DB；都没有则返回 None（由调用方要求显式 --db，禁止凭空新建）。"""
     local = os.path.join(BASE, ".memory-graph", "memory.axeb")
     if os.path.exists(local):
         return local
+    cwd_db = _find_up(os.getcwd())
+    if cwd_db:
+        return cwd_db
     env = os.environ.get("LOBSTER_DB")
     if env:
         return env
@@ -411,8 +429,68 @@ def _negated(text, term, window=NEG_WINDOW):
     return n > 0
 
 
+TITLE_CUES = ("书名", "题眼", "题名", "戏名", "唱本", "本名")
+GLOSS_CUES = ("指", "一词", "这个称呼", "这个称谓", "称谓", "意为", "说的是", "称呼")
+GLOSS_SPAN = 12
+
+
+def _titled_ref(text, term):
+    """term 的每一次出现是否都在书名号《…》内，或紧邻「书名／题眼」等引用提示词。
+    与 _negated 同为「放过」判据但语义不同：否定语境＝作者在纠正，引用语境＝作者在指称书名。
+    真实坑（2026-09-02）：ch001 写「（书名《有事钟无艳》的民间源头自此埋下）」——
+    「钟无艳」在这里是被引用的书名（红线⑥的合法例外①），不是史官层的误用，
+    而 sink-check 只认否定语境，把它判成残留 → 人只能手动跳过，纪律随之作废。"""
+    start, n = 0, 0
+    while True:
+        i = text.find(term, start)
+        if i < 0:
+            break
+        n += 1
+        pre = text[max(0, i - 16): i]
+        post = text[i + len(term): i + len(term) + 16]
+        in_brackets = False
+        lb = pre.rfind("《")
+        if lb >= 0 and "》" not in pre[lb:]:
+            rb = post.find("》")
+            if rb >= 0 and "《" not in post[:rb]:
+                in_brackets = True
+        near_cue = any(cue in text[max(0, i - 8):i] for cue in TITLE_CUES)
+        # 释义语境：「娘娘」指妻妾身份——作者在**谈论**这个词（多半是红线的裁定说明），不是在用它
+        in_quotes = (text[i - 1:i] in ("「", "『", "\"", "'")
+                     and post[:1] in ("」", "』", "\"", "'"))
+        gloss = in_quotes and any(cue in post[:GLOSS_SPAN] for cue in GLOSS_CUES)
+        if not (in_brackets or near_cue or gloss):
+            return False
+        start = i + len(term)
+    return n > 0
+
+
+EXEMPT_MARK = "下沉豁免"
+EXEMPT_SPAN = 60
+
+
+def _exempt(text, term):
+    """节点显式声明的豁免：形如「【下沉豁免·钟无艳：民间戏语层，红线⑥例外】」。
+    规则允许的例外必须写进数据本身（带理由），而不是让人每次手动跳过——
+    手动跳过的下一步就是"反正每次都要手动看"，下沉纪律随即作废。
+
+    只认**标记里点名的词**：「【下沉豁免·娘娘：…】」不豁免「钟无艳」——
+    豁免必须指名道姓，否则一个标记就把整章洗白了。"""
+    start = 0
+    while True:
+        k = text.find(EXEMPT_MARK, start)
+        if k < 0:
+            return False
+        seg = text[k + len(EXEMPT_MARK): k + len(EXEMPT_MARK) + EXEMPT_SPAN]
+        m = _re.match(r"\s*[·:：]?\s*([^\n】：；]{1,40})", seg)
+        if m and term in m.group(1):
+            return True
+        start = k + len(EXEMPT_MARK)
+    return False
+
+
 def do_sink_check(mg, stale, ok=None, chapter_re=DEFAULT_CHAPTER_RE):
-    """下沉校验：扫章节节点，报「仍写旧口径」/「已纠正(否定语境)」/「已写新口径」/「无关」。
+    """下沉校验：扫章节节点，报「仍写旧口径」/「引用语境(否定句·书名题眼)」/「已写新口径」/「无关」。
     stale=应被替换的旧措辞（可多个）；ok=新口径关键词（可多个）。"""
     g = mg._g
     nodes = all_nodes(g)
@@ -425,12 +503,24 @@ def do_sink_check(mg, stale, ok=None, chapter_re=DEFAULT_CHAPTER_RE):
         has_stale = [s for s in stale if s in text]
         has_ok = [o for o in ok if o in text]
         if has_stale:
-            # 旧词命中：区分「真残留」与「否定语境引用」（如「她不是挡路被碾的石头」）
+            # 旧词命中：区分「真残留」与「引用语境」（否定句如「她不是挡路被碾的石头」、
+            # 书名题眼如「书名《有事钟无艳》」——后者是红线允许的引用，不是误用）
             real = [s for s in has_stale if not _negated(text, s)]
+            cited, exempted = [], []
+            for s in real:
+                if _titled_ref(text, s):
+                    cited.append(s)
+                elif _exempt(text, s):
+                    exempted.append(s)
+            real = [s for s in real if s not in cited and s not in exempted]
+            for s in cited:
+                neg.append((c, [s], has_ok, "引用·书名/题眼/释义"))
+            for s in exempted:
+                neg.append((c, [s], has_ok, "节点声明豁免"))
             if real:
                 bad.append((c, real, has_ok))
-            else:
-                neg.append((c, has_stale, has_ok))
+            elif not cited and not exempted:
+                neg.append((c, has_stale, has_ok, "否定句"))
         elif has_ok:
             good.append((c, has_ok))
         else:
@@ -446,10 +536,10 @@ def do_sink_check(mg, stale, ok=None, chapter_re=DEFAULT_CHAPTER_RE):
     if not bad:
         out.append("  ✅ 无残留")
     out.append("")
-    out.append(f"## ⚠️ 已纠正·否定语境引用（{len(neg)}）— 人工确认后放过")
-    for c, hs, ho in neg:
+    out.append(f"## ⚠️ 引用语境（{len(neg)}）— 否定句或书名/题眼引用，人工确认后放过")
+    for c, hs, ho, kind in neg:
         tag = f"  (另含新口径: {'、'.join(ho)})" if ho else ""
-        out.append(f"  {c} | {nodes[c].get('label','')[:32]} | 旧词仅出现于否定句: {'、'.join(hs)}{tag}")
+        out.append(f"  {c} | {nodes[c].get('label','')[:32]} | {kind}: {'、'.join(hs)}{tag}")
     if not neg:
         out.append("  （无）")
     out.append("")
@@ -467,7 +557,17 @@ def do_sink_check(mg, stale, ok=None, chapter_re=DEFAULT_CHAPTER_RE):
     out.append("")
     verdict = "PASS：无旧口径残留" if not bad else f"FAIL：{len(bad)} 章仍写旧口径"
     if neg:
-        verdict += f"（另有 {len(neg)} 章为否定语境引用，需人工确认）"
+        n_title = sum(1 for x in neg if x[3] == "引用·书名/题眼/释义")
+        n_ex = sum(1 for x in neg if x[3] == "节点声明豁免")
+        n_neg = len(neg) - n_title - n_ex
+        detail = []
+        if n_neg:
+            detail.append(f"{n_neg} 章否定句")
+        if n_title:
+            detail.append(f"{n_title} 章书名/题眼引用")
+        if n_ex:
+            detail.append(f"{n_ex} 章节点声明豁免")
+        verdict += f"（另有 {'、'.join(detail)}，需人工确认）"
     out.append(f"结论: {verdict}")
     return out, (1 if bad else 0)
 
@@ -499,8 +599,34 @@ NEG_CASES = [
 ]
 
 
+# 引用语境（书名/题眼）回归用例：旧词是被指称的书名，不是误用
+TITLED_CASES = [
+    # (文本, term, 期望 _titled_ref 返回值)
+    ("（书名《有事钟无艳》的民间源头自此埋下）", "钟无艳", True),
+    ("题眼「有事钟无艳，无事夏迎春」", "钟无艳", True),
+    ("她就是钟无艳", "钟无艳", False),
+    # 书名号与另一处独立出现并存 → 不得整体放行
+    ("书名《有事钟无艳》。街市上都叫她钟无艳", "钟无艳", False),
+    ("", "钟无艳", False),
+    # 释义语境：作者在谈论这个词（红线裁定说明），不是在用这个词
+    ("「娘娘」指妻妾身份，与接下后位不冲突", "娘娘", True),
+    ("她被称作「娘娘」，人人称善", "娘娘", False),
+    ("「娘娘」是宋元以后的宫廷称呼", "娘娘", True),
+]
+
+
+# 节点声明豁免的回归用例
+EXEMPT_CASES = [
+    # (文本, term, 期望 _exempt 返回值)
+    ("【下沉豁免·钟无艳：民间戏语层，红线⑥例外】", "钟无艳", True),
+    ("【下沉豁免·钟无艳：民间戏语层】她唱的是钟无艳", "钟无艳", True),
+    ("【下沉豁免·娘娘：民间戏语层】她还是叫钟无艳", "钟无艳", False),
+    ("史官层写她", "钟无艳", False),
+]
+
+
 def do_selftest():
-    """否定语境识别自检——sink-check 的判据本身必须先被校验，
+    """引用语境识别自检——sink-check 的判据本身必须先被校验，
     否则工具一误报，人就会开始跳过它，下沉纪律随即作废。"""
     out = ["# selftest  _negated 否定语境识别", ""]
     bad = 0
@@ -511,8 +637,37 @@ def do_selftest():
             out.append(f"  ✗ #{i:02d} term={term!r} want={want} got={got} | {text!r}")
     out.append("")
     out.append(f"用例 {len(NEG_CASES)} 条，失败 {bad} 条")
-    out.append(f"结论: {'PASS' if bad == 0 else 'FAIL：_negated 判定回归'}")
-    return out, (1 if bad else 0)
+
+    out.append("")
+    out.append("# selftest  _titled_ref 引用语境识别（书名/题眼）")
+    out.append("")
+    tbad = 0
+    for i, (text, term, want) in enumerate(TITLED_CASES, 1):
+        got = _titled_ref(text, term)
+        if got != want:
+            tbad += 1
+            out.append(f"  ✗ #{i:02d} term={term!r} want={want} got={got} | {text!r}")
+    out.append("")
+    out.append(f"用例 {len(TITLED_CASES)} 条，失败 {tbad} 条")
+
+    out.append("")
+    out.append("# selftest  _exempt 节点声明豁免")
+    out.append("")
+    ebad = 0
+    for i, (text, term, want) in enumerate(EXEMPT_CASES, 1):
+        got = _exempt(text, term)
+        if got != want:
+            ebad += 1
+            out.append(f"  ✗ #{i:02d} term={term!r} want={want} got={got} | {text!r}")
+    out.append("")
+    out.append(f"用例 {len(EXEMPT_CASES)} 条，失败 {ebad} 条")
+
+    total = bad + tbad + ebad
+    out.append("")
+    out.append(
+        f"合计 {len(NEG_CASES) + len(TITLED_CASES) + len(EXEMPT_CASES)} 条，失败 {total} 条")
+    out.append(f"结论: {'PASS' if total == 0 else 'FAIL：判据回归'}")
+    return out, (1 if total else 0)
 
 
 def main():
