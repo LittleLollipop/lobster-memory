@@ -267,6 +267,13 @@ $PY tools/graph_crud.py selftest                            # 工具自检:否�
 - 写操作一律走 `MemoryGraph` 封装层，绝不碰底层 `mg._g.add_edge`（对同 (src,dst) 是「替换+复制」语义，会损坏图）。
 - 图是简单有向图：每对 (src→dst) 至多一条边；要改 kind 用 `edge set-kind`，多语义关系写进节点 content/边属性或绕中间节点。
 - `add` 默认幂等：已存在同 kind 边则跳过；底层偶发双写由 `_ensure_single` 去重兜底。
+- **⚠️ bulk 的 op 名只有三个：`upsert` / `status` / `edge_add`**（`edge set-kind`/`edge rm` 是 CLI 子命令，不是 bulk op）。
+  写 `{"op":"edge", "kind_name":...}` **不会报错**，而是逐条打印 `未知 op: edge` 后 exit 0 ——
+  看起来像"跑完了"，实际边一条没落（实测 batch15：5 个 upsert 成功、7 条边全静默丢失，
+  事后 `get` 才发现没边）。正确写法：`{"op":"edge_add","from":A,"to":B,"kind":"governs","weight":1.5}`
+  （字段名 `from`/`to`/`kind`/`weight`；`edge_add` 内部走 `_ensure_single`，保单边）。
+  ★**bulk 跑完必须回看每一行的返回值**：只有 `=> 新增 / 覆盖 / 已加边（保单边）` 才算落上，
+  出现 `未知 op` 立刻改 op 名重跑（只重跑失败的边即可，upsert 幂等不用回滚）。
 - **bulk 字段名有两个别名坑，均已兼容，但仍优先用第一种**：`status` op 认 `status`/`value`；
   `edge_*` op 认 `from`/`to` 与 `src`/`dst`。写错时旧版只抛裸 `TypeError: None + str`，
   看不出是字段名问题——已修为可读报错（`<缺 id / from-src / to-dst>`）。
