@@ -134,7 +134,7 @@ $PY tools/graph_crud.py sink-check --stale 兵变 --stale 挡路被碾的石头 
 #    → 结论 PASS (exit 0) 才算收工；FAIL (exit 1) 继续改
 #    → 三 bucket：❌仍写旧口径(必须改) / ⚠️引用语境(否定句·书名题眼·声明豁免，人工确认) / ✅已写新口径
 # 3) 工具自检（改过 _negated / _titled_ref / _exempt 后必跑，不需要图库）
-$PY tools/graph_crud.py selftest   # 30 条：否定语境 18 + 书名/释义引用 8 + 声明豁免 4
+$PY tools/graph_crud.py selftest   # 46 条：否定语境 25 + 书名/释义引用 17 + 声明豁免 4
 ```
 
 > **否定语境判定边界 = 小句，不是固定字数**（踩坑修正）：
@@ -251,6 +251,8 @@ PY=~/.workbuddy/venvs/lobster-memory/bin/python
 #    必须写成 `$PY tools/graph_crud.py`（用解释器跑，软链路径也能被正确解析到项目根）。
 # 项目里推荐把 tools/graph_crud.py 软链到本文件，避免多份副本漂移。
 
+$PY tools/graph_crud.py list [--prefix P] [--bare --id-only]   # --bare 管道取 id(默认输出带前导空格)
+$PY tools/graph_crud.py dump [--prefix P] [--full]  # ⚠️批量分析必须 --full，否则 content 只 60 字
 $PY tools/graph_crud.py scan-dups                 # 重边体检(全图 0 平行边才算健康)
 $PY tools/graph_crud.py get <id>                  # 查节点 + 出/入边(kind/weight)
 $PY tools/graph_crud.py upsert <id> --label L --content C
@@ -258,10 +260,31 @@ $PY tools/graph_crud.py edge add <from> <to> --kind K --weight W
 $PY tools/graph_crud.py edge set-kind <from> <to> --kind K
 $PY tools/graph_crud.py edge rm <from> <to>
 $PY tools/graph_crud.py bulk ops.json             # 批量:JSON 数组,见文件头文档
-$PY tools/graph_crud.py impact <id> [--kw K]...   # 设定下沉:受影响章号清单(改设定必跑)
+$PY tools/graph_crud.py impact <id> [--kw K]... [--max-cover 0.6]  # 设定下沉:受影响章号清单(改设定必跑)
 $PY tools/graph_crud.py sink-check --stale 旧词 --ok 新词   # 下沉验收:exit 0 才算完成
 $PY tools/graph_crud.py selftest                            # 工具自检:否定语境回归用例(无需图库)
 ```
+
+**⚠️ 批量取数三戒（2026-09-08：三条都造成过「静默失真」——不报错，只是结论错）**：
+1. **`dump` 默认只输出 content 前 60 字**，批量分析必须加 `--full`。
+   事故：《有事钟无艳》审计第一轮基于截断文本，得出「伏笔 0 条、红线零违规」的假结论，
+   真实数字是 234 条。⚠️也不要凭 dump 的短输出下结论。
+2. **`list` 默认输出带两个前导空格**，把首字段直接喂给 `get` 会**静默取到空串**。
+   管道取 id 用 `--bare --id-only`。（CLI 入口现已统一 strip 所有 id 类参数兜底，但仍别依赖。）
+3. **`impact` 的 B 组关键词有覆盖度闸门**（`--max-cover`，默认 0.6）：
+   命中章数占比超阈值的词被剔除并**明示列出**。由来：自动抽词常抽到「出场」「钟离春」这类词，
+   命中 96/96 章，B 组等于全量章号——比不给还糟（人无法逐核，只能放弃这个工具）。
+   确需保留用 `--max-cover 1.0`。
+
+**⚠️ 机检判据必须认人真正使用的写法（2026-09-08）**：
+`sink-check` 曾把**每一条红线声明本身**判成「旧词残留」——4 章 FAIL 全是误报，
+根因是 `NEG_CUES` 里没有 `⛔`：本项目的禁令一律写作「⛔X」，⛔ 是最强的否定信号，机器却不认。
+**后果比误报严重：写得越守纪律 FAIL 越多，人只能手动跳过，纪律随即作废。**
+已修：①`⛔` 等入 `NEG_CUES`；②⛔ 是**行首标记**（作用域=整行），用句级边界（。！？\n）判定，
+其余否定词是小句谓词仍用小句边界（。！？；，\n）——两者边界不同，混用会互相破坏；
+③`_titled_ref` 增加「更长引用短语的一部分」（「有事钟无艳」里的「钟无艳」是引用俗语整体，不是在单独用词）。
+★**新增放行判据必须同时补 selftest 反向用例**（「⛔ 在别的小句 → 不得外溢」这类），
+否则放行迟早会扩张成「整章被洗白」——这与 `_titled_ref` 收录「书名/题眼」是同一条道理。
 
 **铁律（踩坑固化）**：
 - 写操作一律走 `MemoryGraph` 封装层，绝不碰底层 `mg._g.add_edge`（对同 (src,dst) 是「替换+复制」语义，会损坏图）。

@@ -10,10 +10,11 @@
   * 读操作（取边类型等）只读 mg._g 的 out_neighbors/get_edge，单进程内可靠。
 
 命令:
-  list [--prefix P] [--domain D] [--status S] [--type T]
+  list [--prefix P] [--bare] [--id-only]  # ⚠️默认输出带前导空格，管道取 id 用 --bare --id-only
   get <id>                       # 节点属性 + 出/入边（含 kind、label、weight）
   search <kw>                    # 全文搜 content/label
-  dump [--prefix P]              # 全量节点+边导出（便于体检/备份比对）
+  dump [--prefix P] [--full]     # 全量节点+边导出（便于体检/备份比对）
+                                 # ⚠️默认 content 只取前 60 字；批量分析必须加 --full
 
   upsert <id> --label L [--content C] [--type T] [--domain D] [--weight W]
   status <id> <STATUS>           # 设状态：live / inactive（退役，可逆）
@@ -259,6 +260,12 @@ def do_status(mg, id, status):
     return "已设状态" if ok else f"失败（节点不存在？{id}）"
 
 
+def _s(v):
+    """剥离 id 两端空白：list 输出带前导空格，粘贴进 bulk JSON 后
+    会静默建出带空格的孤儿节点（查得到 id 却 get 不到内容）。"""
+    return v.strip() if isinstance(v, str) else v
+
+
 def do_bulk(mg, path):
     with open(path, "r", encoding="utf-8") as f:
         ops = json.load(f)
@@ -272,10 +279,10 @@ def do_bulk(mg, path):
             # 旧版只认 from/to，写 src/dst 时日志行抛 TypeError（None+str），
             # 报错信息完全看不出是字段名问题——属「工具难用人就绕过去」的典型
             # （与 status/value 同款，见下）。
-            frm = op.get("from") or op.get("src")
-            to = op.get("to") or op.get("dst")
+            frm = _s(op.get("from") or op.get("src"))
+            to = _s(op.get("to") or op.get("dst"))
             if kind == "upsert":
-                r = do_upsert(mg, op["id"], op["label"], op.get("content", ""),
+                r = do_upsert(mg, _s(op["id"]), op["label"], op.get("content", ""),
                               op.get("type", "concept"), op.get("domain", "knowledge"),
                               float(op.get("weight", 1.0)))
             elif kind == "edge_add":
@@ -297,7 +304,7 @@ def do_bulk(mg, path):
                     r = ("status op 缺字段：需 op['status'] 或 op['value']"
                          "（取值 live / inactive / frozen）")
                 else:
-                    r = do_status(mg, op["id"], sv)
+                    r = do_status(mg, _s(op["id"]), sv)
             else:
                 r = f"未知 op: {kind}"
         except Exception as ex:
@@ -311,6 +318,7 @@ def do_bulk(mg, path):
 import re as _re
 
 DEFAULT_CHAPTER_RE = r"^ch\d{3,}$"
+DEFAULT_MAX_COVER = 0.6  # impact B 组：关键词命中章数占比超过此值即视为无区分度，剔除
 
 
 def _chapter_ids(nodes, pattern=DEFAULT_CHAPTER_RE):
@@ -332,9 +340,19 @@ def extract_terms(content):
     return {t.strip() for t in terms if 2 <= len(t.strip()) <= 14}
 
 
-def do_impact(mg, node_id, kws=None, depth=2, chapter_re=DEFAULT_CHAPTER_RE, hub_degree=15):
+def _chapter_text(nodes, c):
+    return (nodes[c].get("content") or "") + (nodes[c].get("label") or "")
+
+
+def do_impact(mg, node_id, kws=None, depth=2, chapter_re=DEFAULT_CHAPTER_RE, hub_degree=15,
+              max_cover=DEFAULT_MAX_COVER):
     """列出「改动此设定节点」受影响的章号清单。
-    A 组 = 边可达（depth 跳内，双向）；B 组 = 内容关键词命中（最易漏，重点看）。"""
+    A 组 = 边可达（depth 跳内，双向）；B 组 = 内容关键词命中（最易漏，重点看）。
+
+    max_cover：B 组关键词的**区分度闸门**——命中章数占比超过该阈值的词视为噪声剔除。
+    默认 0.6。由来：不做这道闸，自动抽词常抽到「出场」「钟」这类词，
+    命中 96/96 章，B 组等于全量章号，比不给还糟（人无法逐章核，只能放弃这个工具）。
+    """
     g = mg._g
     nodes = all_nodes(g)
     edges = all_edges(g)
@@ -371,16 +389,27 @@ def do_impact(mg, node_id, kws=None, depth=2, chapter_re=DEFAULT_CHAPTER_RE, hub
     if not kws:
         cand = extract_terms(nodes[node_id].get("content") or "")
         terms = {t for t in cand if any(t in (nodes[c].get("content") or "") for c in chapters)}
+    # ★覆盖度闸门：先算出每个词的命中率，超过阈值的一律剔除并**明示**——
+    # 不静默丢弃，否则用户以为「关键词全命中＝影响面真这么大」。
+    n_ch = max(1, len(chapters))
+    cover = {t: sum(1 for c in chapters if t in _chapter_text(nodes, c)) / n_ch
+             for t in terms}
+    noise = sorted(t for t, r in cover.items() if r > max_cover)
+    terms = terms - set(noise)
+
     hit = {}
     for c in chapters:
-        ctext = (nodes[c].get("content") or "") + (nodes[c].get("label") or "")
-        ms = [t for t in terms if t in ctext]
+        ms = [t for t in terms if t in _chapter_text(nodes, c)]
         if ms:
             hit[c] = ms
 
     out = []
     out.append(f"# impact: {node_id} （{nodes[node_id].get('label','')}）")
     out.append(f"关键词: {sorted(terms) if terms else '(无自动抽取，请用 --kw 指定)'}")
+    if noise:
+        out.append(
+            f"⚠️ 已剔除高频无区分度词（命中 >{max_cover:.0%} 章）：{'、'.join(noise)}"
+            f" — 全命中＝没筛选；确需保留用 --max-cover 1.0")
     out.append("")
     out.append(f"## A 组 · 边可达章节（{len(linked)}）— 必须逐章核对")
     out.extend(f"  {c} | {nodes[c].get('label','')[:40]}" for c in sorted(linked))
@@ -400,7 +429,13 @@ def do_impact(mg, node_id, kws=None, depth=2, chapter_re=DEFAULT_CHAPTER_RE, hub
 
 
 NEG_CUES = ("不是", "并非", "禁写", "不写", "没有", "严禁", "避免", "不能", "不再",
-            "别写", "禁用", "删掉", "改掉", "旧稿", "原写", "原稿", "已纠正", "纠正", "勿")
+            "别写", "禁用", "删掉", "改掉", "旧稿", "原写", "原稿", "已纠正", "纠正", "勿",
+            # ⛔ 及下列为 2026-09-08 补。⛔ 是本项目**禁令的专用标记**（红线一律写作「⛔X」），
+            # 它其实是最强的否定信号，却一直不在表里——后果是 sink-check 把每一条
+            # 红线声明**本身**判成「旧词残留」：写得越守纪律，FAIL 越多。
+            # 教训与 _titled_ref 收录书名/题眼完全同构——**判据若不认人真正使用的写法，
+            # 人就只能手动跳过，纪律随即作废**。
+            "⛔", "不得", "不许", "不该", "不可", "忌写")
 
 
 NEG_WINDOW = 80  # 小句最大回看长度（防超长句），非判定窗口
@@ -430,9 +465,23 @@ def _negated(text, term, window=NEG_WINDOW):
                 cut = k
         if cut >= 0:
             clause = clause[cut + 1:]
-        if not any(cue in clause for cue in NEG_CUES):
-            return False
-        start = i + len(term)
+        if any(cue in clause for cue in NEG_CUES):
+            start = i + len(term)
+            continue
+        # ⛔ 是**行首禁令标记**（写法如「- ⛔红线⑥：…」「⛔称呼：…」），
+        # 作用域是整行/整个条目，不是一个谓词——用小句边界会把它切掉
+        # （「⛔称呼：…；「钟无艳」仅民间戏语层」里的 ⛔ 落在分号之前）。
+        # 因此 ⛔ 单独用**句级**边界（。！？\n，不含分号逗号）。
+        head = text[:i]
+        scut = -1
+        for sep in "。！？\n":
+            k = head.rfind(sep)
+            if k > scut:
+                scut = k
+        if "⛔" in head[scut + 1:]:
+            start = i + len(term)
+            continue
+        return False
     return n > 0
 
 
@@ -470,7 +519,19 @@ def _titled_ref(text, term):
         in_quotes = (text[i - 1:i] in ("「", "『", "\"", "'")
                      and post[:1] in ("」", "』", "\"", "'"))
         gloss = in_quotes and any(cue in post[:GLOSS_SPAN] for cue in GLOSS_CUES)
-        if not (in_brackets or near_cue or gloss):
+        # 更长引用短语的一部分：如「有事钟无艳」里的「钟无艳」——
+        # 作者引用的是那个短语整体（俗语/题眼），不是单独在用这个词。
+        # 判据：term 被引号包裹，且引号内的内容比 term 本身长。
+        part_of_phrase = False
+        lo = max(pre.rfind("「"), pre.rfind("『"),
+                 pre.rfind("\""), pre.rfind("'"))
+        hi = min([x for x in (post.find("」"), post.find("』"),
+                              post.find("\""), post.find("'")) if x >= 0],
+                 default=-1)
+        if lo >= 0 and hi >= 0:
+            inner = text[lo + 1: i + len(term) + hi]
+            part_of_phrase = len(inner.strip()) > len(term)
+        if not (in_brackets or near_cue or gloss or part_of_phrase):
             return False
         start = i + len(term)
     return n > 0
@@ -607,6 +668,17 @@ NEG_CASES = [
     ("禁写。\n兵变发生了", "兵变", False),
     ("兵变。禁写兵变", "兵变", False),
     ("禁写兵变。兵变", "兵变", False),
+    # ⛔ 作为禁令标记（2026-09-08）：本项目的红线一律写成「⛔X」，
+    # 曾因不在 cue 表里，导致每条红线声明都被判成「旧词残留」——守纪律反被罚。
+    ("⛔称呼：史官主声一律「钟离春」；「钟无艳」仅民间戏语层", "钟无艳", True),
+    ("⛔**红线⑥：层1 主声⛔「钟无艳」**（一律钟离春／无盐女）", "钟无艳", True),
+    ("⛔「钟无艳」不得渗出", "钟无艳", True),
+    ("⛔⛔红线⑥：层1 一律「钟离春／无盐女」，⛔「钟无艳」不得渗出", "钟无艳", True),
+    # 反向：⛔ 在别的小句 → 不得外溢；没有 ⛔ 就是真残留
+    ("⛔红线。\n史官层称她钟无艳", "钟无艳", False),
+    ("旁白说她就是钟无艳", "钟无艳", False),
+    # 自检问句（「有没有出现X？」）不是残留
+    ("有没有出现「钟无艳」（层1）？", "钟无艳", True),
 ]
 
 
@@ -633,6 +705,12 @@ TITLED_CASES = [
     # 反向：没有引用提示词，就是史官主声在用它 → 真残留
     ("史官主声一律称她钟无艳", "钟无艳", False),
     ("她就是那个钟无艳，无人不晓", "钟无艳", False),
+    # 更长引用短语的一部分（2026-09-08）：「有事钟无艳」是被引用的俗语/题眼整体，
+    # 作者不是在单独使用「钟无艳」这个词
+    ("这正是「有事钟无艳」的原型动作", "钟无艳", True),
+    ("「有事钟无艳，无事夏迎春」这句俗话", "钟无艳", True),
+    # 反向：引号内就是 term 本身 → 不算短语引用（应靠否定语境或真残留判定）
+    ("她被叫作「钟无艳」", "钟无艳", False),
 ]
 
 
@@ -701,6 +779,9 @@ def main():
     sp = sub.add_parser("list", help="列出节点")
     add_db(sp); sp.add_argument("--prefix", default=""); sp.add_argument("--domain", default="")
     sp.add_argument("--status", default=""); sp.add_argument("--type", default="")
+    sp.add_argument("--bare", action="store_true",
+                    help="输出不带缩进与分隔（每行仅 `id` 或 `id|label`），便于管道取 id")
+    sp.add_argument("--id-only", action="store_true", help="只输出 id 一列（配合 --bare 使用）")
 
     sp = sub.add_parser("get", help="查节点（含出/入边与 kind）")
     add_db(sp); sp.add_argument("id")
@@ -710,6 +791,8 @@ def main():
 
     sp = sub.add_parser("dump", help="全量导出节点+边")
     add_db(sp); sp.add_argument("--prefix", default="")
+    sp.add_argument("--full", action="store_true",
+                    help="输出完整 content（默认只取前 60 字；⚠️批量分析必须用 --full，否则静默失真）")
 
     sp = sub.add_parser("upsert", help="幂等建/改节点")
     add_db(sp); sp.add_argument("id"); sp.add_argument("--label", required=True)
@@ -745,6 +828,9 @@ def main():
     sp.add_argument("--hub-degree", type=int, default=15,
                     help="度数≥该值视为枢纽，可作终点但不中转（防两跳连通全图），默认 15")
     sp.add_argument("--chapter-re", default=DEFAULT_CHAPTER_RE, help="章节点 id 正则")
+    sp.add_argument("--max-cover", type=float, default=DEFAULT_MAX_COVER,
+                    help=f"B 组关键词命中章数占比上限，超过即视为无区分度并剔除（默认 {DEFAULT_MAX_COVER}；"
+                         f"设 1.0 关闭该闸门）")
 
     sp = sub.add_parser("selftest", help="工具自检：否定语境识别回归用例（不需要图库）")
 
@@ -758,6 +844,20 @@ def main():
     sp.add_argument("--chapter-re", default=DEFAULT_CHAPTER_RE, help="章节点 id 正则")
 
     args = p.parse_args()
+
+    # ⚠️ id 类参数统一 strip：`list` 默认输出带两个前导空格，把首字段直接喂给
+    # get/edge 会「静默取到空串」——不报错，只是查不到（2026-09-08 事故：
+    # 批量取全文时数百节点全返回空，整轮审计结论失真）。根治放在入口，
+    # 这样无论调用方 strip 与否都不会再踩。
+    for _a in ("id", "from_id", "to_id", "prefix"):
+        _v = getattr(args, _a, None)
+        if isinstance(_v, str):
+            setattr(args, _a, _v.strip())
+    for _a in ("kw", "stale", "ok"):
+        _v = getattr(args, _a, None)
+        if isinstance(_v, list):
+            setattr(args, _a, [x.strip() for x in _v if isinstance(x, str)])
+
     if args.cmd == "selftest":
         lines, code = do_selftest()
         print("\n".join(lines))
@@ -781,7 +881,13 @@ def main():
             if args.domain and d.get("domain") != args.domain: continue
             if args.status and d.get("status") != args.status: continue
             if args.type and d.get("type") != args.type: continue
-            print(f"  {i} | {d.get('label','')[:40]} | w{d.get('weight','')} | {d.get('status','')}")
+            if args.bare:
+                # ⚠️ 默认输出带两个前导空格（人眼可读），但把首字段直接喂给 get
+                # 会「静默取到空串」——不报错、只是查不到（2026-09-08 事故）。
+                # 管道取 id 一律用 --bare --id-only。
+                print(i if args.id_only else f"{i}|{d.get('label','')[:40]}")
+            else:
+                print(f"  {i} | {d.get('label','')[:40]} | w{d.get('weight','')} | {d.get('status','')}")
 
     elif args.cmd == "get":
         d = mg.get_vertex(args.id)
@@ -818,7 +924,10 @@ def main():
         print(f"=== 节点 ({len(ids)}) ===")
         for i in ids:
             d = nodes[i]
-            print(f"{i} | {d.get('label','')} | {d.get('type')}/{d.get('domain')} | {d.get('status')} | {d.get('content','')[:60]}")
+            body = d.get('content', '')
+            if not args.full:
+                body = body[:60]
+            print(f"{i} | {d.get('label','')} | {d.get('type')}/{d.get('domain')} | {d.get('status')} | {body}")
         edges = all_edges(g)
         print(f"\n=== 边 ({len(edges)}) ===")
         for s, d2, k, w, dm, st in edges:
@@ -858,7 +967,8 @@ def main():
             print(line)
 
     elif args.cmd == "impact":
-        for line in do_impact(mg, args.id, args.kw or None, args.depth, args.chapter_re, args.hub_degree):
+        for line in do_impact(mg, args.id, args.kw or None, args.depth, args.chapter_re,
+                              args.hub_degree, args.max_cover):
             print(line)
 
     elif args.cmd == "sink-check":
