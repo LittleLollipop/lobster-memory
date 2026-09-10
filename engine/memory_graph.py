@@ -12,9 +12,11 @@ from .schema import (
     default_edge_props,
     default_node_props,
     dict_from_props,
+    is_polluted_id,
     props_to_dict,
     str_to_id,
     ts_now,
+    validate_str_id,
 )
 
 logger = logging.getLogger("lobster_memory.memory_graph")
@@ -231,10 +233,16 @@ class MemoryGraph:
     # ── Write: vertex upsert & edge ─────────────────────
 
     def upsert_vertex(self, props: Dict[str, Any]) -> int:
-        """Upsert a vertex from a full props dict (preserves caller-set fields)."""
-        nid = str_to_id(props["id"])
+        """Upsert a vertex from a full props dict (preserves caller-set fields).
+
+        写入前校验字符串 id 形态（validate_str_id）：硬拦「把 str_to_id 输出当 id
+        回写」的污染——那会让节点永久失去可读 id（哈希不可逆），并连带让 get 的
+        入边清单为空、list --prefix 漏检（2026-09-10 事故，见 schema.is_polluted_id）。
+        """
+        nid = str_to_id(validate_str_id(props.get("id")))
         props = dict(props)
         props["updated_at"] = ts_now()
+        props["id"] = validate_str_id(props["id"])   # 落库值也必须是原始字符串 id
         self._g.add_vertex(nid, props_to_dict(props))
         return nid
 

@@ -26,6 +26,8 @@
   edge rm <from> <to>
 
   scan-dups                     # 体检：列出任何 (src,dst,kind) 出现 >1 的重边
+  check-ids                     # 体检：props['id'] 是否被污染成哈希数字（有污染即 exit 1）
+                                # 症状：get 入边为空 / list --prefix 漏检 / dump id 不可用
   bulk <file.json>              # 批量：JSON 数组，每个元素 {op:..., ...}，一次执行
 
 bulk 文件格式示例（ops 顺序执行，失败不中断，末尾汇总）:
@@ -62,7 +64,14 @@ SKILL_ENGINE = os.environ.get(
 sys.path.insert(0, SKILL_ENGINE)
 
 from engine.memory_graph import MemoryGraph  # noqa: E402
-from engine.schema import ts_now, default_node_props, dict_from_props, props_to_dict  # noqa: E402
+from engine.schema import (  # noqa: E402
+    default_node_props,
+    dict_from_props,
+    is_polluted_id,
+    props_to_dict,
+    ts_now,
+    validate_str_id,
+)
 
 BASE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # 项目根（脚本所在 tools/ 的上两级）
 
@@ -724,6 +733,39 @@ EXEMPT_CASES = [
 ]
 
 
+# ── id 形态体检（治「props['id'] 被写成哈希」，2026-09-10 事故） ──
+def do_check_ids(mg):
+    """体检：列出 props['id'] 被污染成纯数字（str_to_id 输出）的节点。
+
+    污染后果：get 的**入边清单为空**、list --prefix **漏检**、dump 显示不可用 id；
+    原始字符串**不可逆**（哈希），只能按 label 反查历史脚本/JSON 回填。
+    返回 (lines, exit_code)：有污染即非零退出，便于门禁。
+    """
+    g = mg._g
+    rows = []
+    for nid in _all_vertex_ids(g):
+        raw = g.get_vertex(nid)
+        if raw is None:
+            continue
+        p = dict_from_props(dict(raw))
+        if is_polluted_id(p.get("id")):
+            rows.append((str(p.get("id")), p.get("label", ""), p.get("type", "")))
+    out = ["# id 形态体检", ""]
+    out.append(f"污染节点: {len(rows)}")
+    if not rows:
+        out.append("  ✅ 所有节点 props['id'] 均为非纯数字字符串")
+    else:
+        out.append("  ⚠️ 下列节点 props['id'] 是 str_to_id 的十进制输出（原始字符串不可逆）")
+        out.append("     连带症状：get 入边为空 / list --prefix 漏检 / dump 的 id 不可用")
+        out.append("")
+        for pid, lab, typ in sorted(rows, key=lambda x: x[1]):
+            out.append(f"  {pid} | {typ or '-':<10} | {lab}")
+        out.append("")
+        out.append("  恢复法：按 label 反查历史脚本/JSON 中的明文 id，"
+                   "验证 str_to_id(候选) == 该节点键 后回填 raw['id']，并 **save()**。")
+    return out, (1 if rows else 0)
+
+
 def do_selftest():
     """引用语境识别自检——sink-check 的判据本身必须先被校验，
     否则工具一误报，人就会开始跳过它，下沉纪律随即作废。"""
@@ -761,10 +803,32 @@ def do_selftest():
     out.append("")
     out.append(f"用例 {len(EXEMPT_CASES)} 条，失败 {ebad} 条")
 
-    total = bad + tbad + ebad
     out.append("")
-    out.append(
-        f"合计 {len(NEG_CASES) + len(TITLED_CASES) + len(EXEMPT_CASES)} 条，失败 {total} 条")
+    out.append("# selftest  validate_str_id / is_polluted_id（id 污染守卫）")
+    out.append("")
+    vbad = 0
+    vcases = [
+        ("ch003", True), ("fx_lingge", True), ("a", True),
+        ("ch001_old", True), ("1234567", True),          # 7 位数字不拦（非哈希形态）
+        ("8253730911577692809", False), ("12345678", False),
+        ("", False), (None, False), (12345, False),
+    ]
+    for i, (val, want_ok) in enumerate(vcases, 1):
+        try:
+            validate_str_id(val)
+            got = True
+        except Exception:
+            got = False
+        if got != want_ok:
+            vbad += 1
+            out.append(f"  ✗ #{i:02d} val={val!r} want_ok={want_ok} got={got}")
+    out.append("")
+    out.append(f"用例 {len(vcases)} 条，失败 {vbad} 条")
+
+    total = bad + tbad + ebad + vbad
+    ncases = len(NEG_CASES) + len(TITLED_CASES) + len(EXEMPT_CASES) + len(vcases)
+    out.append("")
+    out.append(f"合计 {ncases} 条，失败 {total} 条")
     out.append(f"结论: {'PASS' if total == 0 else 'FAIL：判据回归'}")
     return out, (1 if total else 0)
 
@@ -813,6 +877,10 @@ def main():
     sp.add_argument("--replace", action="store_true", help="add 时把已存在边的 kind 改为 --kind")
 
     sp = sub.add_parser("scan-dups", help="重边体检")
+    add_db(sp)
+
+    sp = sub.add_parser(
+        "check-ids", help="体检 props['id'] 是否被污染成哈希数字（有污染即 exit 1）")
     add_db(sp)
 
     sp = sub.add_parser("bulk", help="批量执行 JSON 操作文件")
@@ -936,8 +1004,16 @@ def main():
             print(f"{s} -[{k}]-> {d2} w{w} {st}")
 
     elif args.cmd == "upsert":
-        r = do_upsert(mg, args.id, args.label, args.content, args.type, args.domain, args.weight)
-        print(f"{r}节点: {args.id}")
+        try:
+            r = do_upsert(mg, args.id, args.label, args.content, args.type, args.domain,
+                          args.weight)
+            print(f"{r}节点: {args.id}")
+        except ValueError as ex:
+            # id 形态非法（如把 str_to_id 输出当 id 回写）——拒绝写入并给可读报错，
+            # 而不是甩一段 traceback（2026-09-10 事故的守卫，见 check-ids）。
+            print(f"❌ {ex}")
+            mg.close()
+            sys.exit(2)
 
     elif args.cmd == "status":
         print(do_status(mg, args.id, args.status))
@@ -961,6 +1037,13 @@ def main():
             print(f"  {s} -[{k}]-> {d2} x{c}")
         if not dups:
             print("  ✅ 无平行重复边")
+
+    elif args.cmd == "check-ids":
+        lines, code = do_check_ids(mg)
+        for line in lines:
+            print(line)
+        mg.close()
+        sys.exit(code)   # 有污染则非零退出，便于脚本/自动化门禁
 
     elif args.cmd == "bulk":
         for line in do_bulk(mg, args.file):

@@ -254,6 +254,7 @@ PY=~/.workbuddy/venvs/lobster-memory/bin/python
 $PY tools/graph_crud.py list [--prefix P] [--bare --id-only]   # --bare 管道取 id(默认输出带前导空格)
 $PY tools/graph_crud.py dump [--prefix P] [--full]  # ⚠️批量分析必须 --full，否则 content 只 60 字
 $PY tools/graph_crud.py scan-dups                 # 重边体检(全图 0 平行边才算健康)
+$PY tools/graph_crud.py check-ids                 # id 形态体检(props['id'] 是哈希数字即 exit 1)
 $PY tools/graph_crud.py get <id>                  # 查节点 + 出/入边(kind/weight)
 $PY tools/graph_crud.py upsert <id> --label L --content C
 $PY tools/graph_crud.py edge add <from> <to> --kind K --weight W
@@ -308,6 +309,21 @@ $PY tools/graph_crud.py selftest                            # 工具自检:否�
   正则 `content: (.*?)\n出边:` 解析，拼上追加段再 `json.dump` 生成 bulk 文件。
   手工 `get` 之后肉眼复述一遍仍然是抄，抄就一定有漏；脚本取的是字节原样。
   生成后校验：`orig[:60] in new_content`（原文确实还在开头）。
+- **⚠️ 节点 id 只能是「非空字符串」，绝不能是纯数字串**（2026-09-10 事故）：
+  把 `str_to_id()` 的十进制输出当 id 回写，会让节点**永久失去可读 id**（哈希不可逆），
+  并连带三症状：`get` 的**入边清单为空**、`list --prefix` **漏检**、`dump` 显示的 id 不可用。
+  实测《有事钟无艳》339 节点中 42 个中招（13 章 + 9 条角色声谱 + 11 条伏笔 + 其余）。
+  ★**写入侧已硬拦**：`upsert_vertex` 调 `validate_str_id`，传哈希 id 直接 raise（bulk 记为该行异常）。
+  ★**读取侧体检**：`$PY tools/graph_crud.py check-ids`（有污染即 exit 1，可接门禁）。
+  ★**恢复法**：哈希不可逆，只能按 label 反查历史脚本/JSON 里的明文 id，
+  用 `str_to_id(候选) == 该节点键` 校验后回填 `raw["id"]`——这是数学验证，不是猜。
+  ★**污染会掩盖重边**：`scan-dups` 输出若带哈希端点，说明该端 id 已坏、重边可能早已存在
+  （实测：修复前显示 `lobster_root -> 596088711727576705 x2`，修复后现形为 `-> ch092 x2`）。
+- **⚠️ 用 MemoryGraph 裸写脚本后必须显式 `save()`**（同日事故）：
+  `engine` 层的 `add_vertex`/`add_edge` 只改内存，**进程退出即丢失，且全无报错**——
+  第一次修复脚本 42 条"全部回填成功"、返回码 0，重开进程一读纹丝未动。
+  `graph_crud.py` 各子命令退出前统一 `mg.close()`（内部落盘）所以看不出来；
+  自己写脚本时必须 `mg.save()` 再 `mg.close()`。★**写完务必另起进程回读验证**（同进程读到的只是内存）。
 - **⚠️ sink-check 默认只扫 `ch\d{3,}`**：楔子/后记/幕/卷这类**非编号篇章不在管辖内**，
   改了它们的措辞不会有任何机器提示。扫它们要显式给 `--chapter-re`：
   `$PY tools/graph_crud.py sink-check --stale 钟无艳 --ok 钟离春 --chapter-re "^(seg_|act)"`

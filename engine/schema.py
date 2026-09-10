@@ -3,6 +3,7 @@
 import hashlib
 import json
 import logging
+import re
 import time
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
@@ -53,6 +54,34 @@ def str_to_id(s: str) -> int:
     """Convert a string id to a u64-compatible integer via SHA-256 truncation."""
     h = hashlib.sha256(s.encode("utf-8")).digest()
     return int.from_bytes(h[:8], "big") % ID_SPACE
+
+
+# 污染的 id 形态：8 位以上纯数字串＝str_to_id 的十进制输出被误存进 props["id"]。
+# 2026-09-10 实测（《有事钟无艳》库 339 节点中 42 个中招）：props["id"] 一旦是哈希，
+# 原始字符串不可逆，且 get 的入边清单为空、list --prefix 漏检、dump 显示不可用 id。
+# 写入侧必须硬拦（本文件 validate_str_id），读取侧用 `graph_crud.py check-ids` 体检。
+_POLLUTED_ID_RE = re.compile(r"^\d{8,}$")
+
+
+def is_polluted_id(s: Any) -> bool:
+    """props["id"] 是否已被污染成哈希形态（8 位以上纯数字串）。"""
+    return bool(_POLLUTED_ID_RE.match(str("" if s is None else s)))
+
+
+def validate_str_id(s: Any) -> str:
+    """校验节点字符串 id 合法并返回原值；非法立即 raise（fail fast，不静默写入）。
+
+    合法 id＝非空字符串且不是纯数字串（如 "ch003" / "fx_lingge"）。
+    拦的正是「把 str_to_id 输出当成 id 回写」这一类写入——它会让节点永久失去
+    可读 id（哈希不可逆），并连带破坏入边显示与 prefix 过滤。
+    """
+    if not isinstance(s, str) or not s:
+        raise ValueError(f"节点 id 必须是非空字符串，收到 {type(s).__name__}: {s!r}")
+    if is_polluted_id(s):
+        raise ValueError(
+            f"节点 id 不能是纯数字串（疑似把 str_to_id 输出当 id 回写）：{s!r}；"
+            f"请传原始字符串 id（如 \"ch003\"）")
+    return s
 
 
 def ts_now() -> str:
