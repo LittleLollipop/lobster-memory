@@ -17,6 +17,9 @@
                                  # ⚠️默认 content 只取前 60 字；批量分析必须加 --full
 
   upsert <id> --label L [--content C] [--type T] [--domain D] [--weight W]
+  append <id> --file F | --text S | (stdin)   # 末尾追加一段（回读校验+防重复+保留 status）
+                                 # ⚠️ upsert 是**整段覆盖**：想给长节点补一段就用 append，
+                                 #    别去 get 原文手抄 —— 从 get 文本里切 content 会多出边块（见下）
   status <id> <STATUS>           # 设状态：live / inactive（退役，可逆）
 
   edge add <from> <to> --kind K [--weight W] [--domain D] [--replace]
@@ -51,6 +54,12 @@ bulk 文件格式示例（ops 顺序执行，失败不中断，末尾汇总）:
     匹配不唯一就会失败；换更长上下文又极易粘到错误位置，把 JSON 写坏。
     元素多就分段写成多个 json 分次 bulk，或用脚本 json.load → append → json.dump。
     落库前一律先 `python -c "import json;json.load(open(f))"` 校验。
+
+  - ⚠️ **想给已有长节点补一段，用 `append`，别用 upsert 重抄原文**（2026-09-11 实锤）：
+    content 从 `get` 的文本输出里只能切出个大概 —— `出边:` 紧跟 content，
+    按 `max(rfind('出边'), rfind('入边'))` 找边界会**多吃整个出边块**，
+    于是就有节点 content 里被烤进了一份 `出边: -> … w1.x`。
+    丢的字没有任何地方能发现（图库是唯一真源）⇒ 边界与拼接交给 `append`，它做回读校验。
 """
 import argparse
 import json
@@ -267,6 +276,45 @@ def do_edge_rm(mg, frm, to):
 def do_status(mg, id, status):
     ok = mg.set_status(id, status)
     return "已设状态" if ok else f"失败（节点不存在？{id}）"
+
+
+def do_append(mg, id, text, sep="\n\n", check=True):
+    """在节点 content **末尾追加**一段 —— `upsert`（整段覆盖）的反面。
+
+    🔴 为什么必须有这个子命令（2026-09-11 实锤，不是洁癖）：
+      `upsert` 是**整段覆盖**，所以要"给长节点补一段"就得把原 content 抄一遍。
+      而原 content 只能从 `get` 的**文本输出**里切，可那个输出把 `出边:` 紧跟在
+      content 后面 —— 用 `max(rfind('出边'), rfind('入边'))` 找边界会**多吃整个出边块**
+      （入边排在出边之后），于是上一轮就有一份 `出边: -> … w1.x` 被烤进了某节点 content。
+      手抄 / 按行切都可能丢字，而**图库是唯一真源，丢了没有任何地方能发现**。
+      ⇒ 边界、拼接、回读校验一律由工具做，调用方只给"往哪个 id 补什么"。
+
+    幂等：text 前 20 字已在 content 里 → 拒绝（防重复追加）。
+    status：`do_upsert` 经 default_node_props 会把 status 重置为 live，
+            这里显式把原 status 补回（本文件 docstring 已警告过这条）。
+    """
+    d = mg.get_vertex(id)
+    if not d:
+        return f"❌ 节点不存在：{id}"
+    old = d.get("content") or ""
+    t = text.rstrip("\n")
+    probe = t[:20]
+    if probe and probe in old:
+        return f"⏭️  已含该片段开头（{probe!r}），跳过以防重复追加"
+    new = (old.rstrip("\n") + sep + t + "\n") if old.strip() else (t + "\n")
+    r = do_upsert(mg, id, d.get("label"), new, d.get("type") or "concept",
+                  d.get("domain") or "knowledge", float(d.get("weight") or 1.0))
+    st = d.get("status") or "live"
+    if st != "live":
+        do_status(mg, id, st)          # upsert 会重置成 live，补回来
+    if check:
+        c2 = (mg.get_vertex(id).get("content") or "").rstrip("\n")
+        if c2 != new.rstrip("\n"):
+            return "❌ 回读不一致（写 %d 字 / 读回 %d 字）—— 不许当成功" % (len(new), len(c2))
+        for p in (old[:40], t[-40:]):
+            if p and p not in c2:
+                return f"❌ 回读丢片段：{p!r}"
+    return f"{r} {id}: content {len(old)} -> {len(new)} 字（status={st}，回读一致）"
 
 
 def _s(v):
@@ -866,6 +914,12 @@ def main():
     sp = sub.add_parser("status", help="设节点状态(live/inactive)")
     add_db(sp); sp.add_argument("id"); sp.add_argument("status")
 
+    sp = sub.add_parser(
+        "append", help="在节点 content 末尾追加一段（含回读校验、防重复、保留 status）")
+    add_db(sp); sp.add_argument("id")
+    sp.add_argument("--file", default=None, help="从文件读追加文本（推荐，免 shell 转义）")
+    sp.add_argument("--text", default=None, help="直接给追加文本；不给则从 stdin 读")
+
     sp = sub.add_parser("edge", help="边操作：add/set-kind/rm")
     add_db(sp)
     sp.add_argument("action", choices=["add", "set-kind", "rm"])
@@ -975,6 +1029,18 @@ def main():
         print("入边:")
         for s, k, w in inn:
             print(f"  <- {s} [{k}] w{w}")
+
+    elif args.cmd == "append":
+        if args.file:
+            txt = open(args.file, encoding="utf-8").read()
+        elif args.text is not None:
+            txt = args.text
+        else:
+            txt = sys.stdin.read()
+        if not txt.strip():
+            print("❌ 追加内容为空（给 --file / --text，或用管道喂 stdin）")
+            sys.exit(2)
+        print(do_append(mg, args.id, txt))
 
     elif args.cmd == "search":
         nodes = all_nodes(g)

@@ -305,10 +305,27 @@ $PY tools/graph_crud.py selftest                            # 工具自检:否�
   凭印象重编 content 会静默删掉已有细纲（实测：ch032 有截话伏笔/H3宣王在场/淳于髡状态三段，
   ch095 有【下沉豁免】标记——整段替换一次全没）。正确姿势：原文完整保留 + 末尾追加新段，
   JSON 写完先量字数，应**大于**原文。
-  ★**更彻底的做法：别手抄原文**——用脚本调 `graph_crud.py get <id>` 取回 content，
-  正则 `content: (.*?)\n出边:` 解析，拼上追加段再 `json.dump` 生成 bulk 文件。
-  手工 `get` 之后肉眼复述一遍仍然是抄，抄就一定有漏；脚本取的是字节原样。
-  生成后校验：`orig[:60] in new_content`（原文确实还在开头）。
+  ★**更彻底的做法：别手抄原文**——用 `graph_crud.py get <id>` 取回 content，
+  拼上追加段再 `json.dump` 生成 bulk 文件。手工 `get` 之后肉眼复述一遍仍然是抄，
+  抄就一定有漏；脚本取的是字节原样。生成后校验：`orig[:60] in new_content`。
+  ★★**首选：直接用 `append` 子命令，别自己解析 `get` 的文本输出**（2026-09-11 新增）：
+  ```bash
+  $PY tools/graph_crud.py append <id> --file /tmp/seg.txt --db <库>   # 或 --text / stdin
+  ```
+  它把边界、拼接、**回读校验**、防重复（片段前 20 字已在则跳过）、
+  **status 保留**（upsert 会把 status 重置成 live）全做掉，返回 `content N -> M 字（回读一致）`。
+  🔴 为什么必须工具化：`get` 的输出把 `出边:` 紧跟在 content 后面，而**入边排在出边之后** ——
+  按 `max(rfind('出边'), rfind('入边'))` 找边界会**多吃整个出边块**，
+  于是有节点 content 里被烤进了一份 `出边: -> … w1.x`（本轮实测发现，已清）。
+  正则 `content: (.*?)\n出边:` 这种写法同样脆：content 自己就可能含 `出边:` 字样。
+  **图库是唯一真源，丢一个字没有任何地方能发现** ⇒ 拼接不许自己写。
+- **⚠️ bulk 的 `upsert` 缺省会把缺失字段重置，不只是 content**（2026-09-11 事故）：
+  `op.get("type","concept")` / `op.get("weight",1.0)` / `op.get("domain","knowledge")` ——
+  **不传就写默认值**。实测只给 id/label/content 时，一个 `type: rule | weight: 1.4` 的规则节点
+  被静默改成 `type: concept | weight: 1.0`，`get` 一眼看不出坏，直到筛规则时才现形。
+  👉 规则：**upsert 一个既有节点，type/domain/weight 三个字段必须显式带上原值**（同样先 `get` 取回）。
+  ⚠️ 连带副作用：`created` 时间戳也会被刷新成当前时间，节点"年龄"失真 ——
+  需要保住 created 的节点别用 bulk upsert，或事后补记。
 - **⚠️ 节点 id 只能是「非空字符串」，绝不能是纯数字串**（2026-09-10 事故）：
   把 `str_to_id()` 的十进制输出当 id 回写，会让节点**永久失去可读 id**（哈希不可逆），
   并连带三症状：`get` 的**入边清单为空**、`list --prefix` **漏检**、`dump` 显示的 id 不可用。
