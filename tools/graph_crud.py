@@ -54,6 +54,18 @@ bulk 文件格式示例（ops 顺序执行，失败不中断，末尾汇总）:
     匹配不唯一就会失败；换更长上下文又极易粘到错误位置，把 JSON 写坏。
     元素多就分段写成多个 json 分次 bulk，或用脚本 json.load → append → json.dump。
     落库前一律先 `python -c "import json;json.load(open(f))"` 校验。
+  - 🔴 **中文正文里的直引号会写坏 bulk JSON，而且报错位置极难定位**（报的是
+    `Expecting ',' delimiter: line N column M`，指向一条几百字长 content 行的某一列，
+    肉眼在那一列附近看不出问题）。2026-09-11 连踩两次：一次是「某物件…文件真值」加了引号，
+    一次是 `"不可达"` —— JSON 里那对引号被当成了字符串的结束/开始。
+    ⇒ **别手写 bulk JSON**：用 Python 把 content 写成三引号字符串，再
+    `json.dump(ops, f, ensure_ascii=False, indent=2)`，把转义交给机器；生成后立刻 `json.load` 回读。
+    同一条适用于任何「往长中文文本里塞 JSON」的场合。
+  - ⚠️ **`;` 串联的命令里，前一个 `&&` 失败会让后面的 `cd` 不执行**，
+    于是相对路径的 `--db` 会解析到别处、静默建出一个空库（本节铁律=唯一写入口，
+    但它对"路径写错"无能为力）。2026-09-11 实测：一条命令里 JSON 校验失败 →
+    `cd .semantic-graph` 没跑 → 后面的 `list --db memory.axeb` 在项目根按相对路径开库，
+    报出 `节点总数: 1`，看起来像图库被清空了。**用绝对路径，或把 `cd` 放在 `;` 之后开头。**
 
   - ⚠️ **想给已有长节点补一段，用 `append`，别用 upsert 重抄原文**（2026-09-11 实锤）：
     content 从 `get` 的文本输出里只能切出个大概 —— `出边:` 紧跟 content，
@@ -191,15 +203,18 @@ def _iid(g, n):
 
 # ── 写操作封装（全部走 mg 封装层） ──
 def do_upsert(mg, id, label, content="", type_="concept", domain="knowledge", weight=1.0):
-    props = default_node_props(id, label, domain, type_, weight, content)
     existing = mg.get_vertex(id)
+    # ⚠️ 写之前取样：若节点正文原本在 summary（seed 管），覆盖后会出现两份正文 ——
+    #    明示给调用方（见 field_split_warning；**不要**改成自动跟随，那会被 seed 覆盖）
+    warn = field_split_warning(existing) if existing else ""
+    props = default_node_props(id, label, domain, type_, weight, content)
     if existing:
         for k, v in props.items():
             if v is not None:
                 existing[k] = v
         existing["updated_at"] = ts_now()
         mg.upsert_vertex(existing)
-        return "覆盖"
+        return "覆盖" + warn
     mg.upsert_vertex(props)
     return "新增"
 
@@ -296,6 +311,9 @@ def do_append(mg, id, text, sep="\n\n", check=True):
     d = mg.get_vertex(id)
     if not d:
         return f"❌ 节点不存在：{id}"
+    # ⚠️ 正文比在 content 里追加 —— **不要**"跟随"写进 summary：
+    #    summary 是 seed 管的字段，重跑 seed 会覆盖它（见 field_split_warning）。
+    #    ⚠️ 不要在返回值里再加一次警告 —— 下面的 do_upsert 已经带了同一句，会重复。
     old = d.get("content") or ""
     t = text.rstrip("\n")
     probe = t[:20]
@@ -323,12 +341,52 @@ def _s(v):
     return v.strip() if isinstance(v, str) else v
 
 
+def node_body(d):
+    """节点的**正文**：`content` 优先，为空则回落 `summary`。
+
+    🔴 本项目图库的正文**分裂在两个字段**里（2026-09-11 实测）：
+       · `tools/seed_semantic.py` 走 `graph_api.upsert_node` 的 **summary** 形参
+         —— 项目图库 220 个节点里有 **136 个（62%）** 的正文只在这里；
+       · 本工具（upsert / append）写的是 **content**。
+    只看 `content` 的后果（三处都踩过）：
+       · `get`   —— 62% 的节点看起来是空的（会误判"这个决策没内容"）
+       · `search`—— 那 136 个节点的正文**搜不到**
+       · `dump`  —— 导出的备份**缺正文**
+    ⚠️ 这是**读**侧的统一兜底，不是把数据合并 —— 写回仍需注意字段不同（append 写 content）。
+    """
+    c = d.get("content") or ""
+    if c.strip():
+        return c
+    return d.get("summary") or ""
+
+
+def field_split_warning(d):
+    """若该节点的正文在 **summary**（= seed 管的字段），返回一句警告；否则返回空串。
+
+    🔴 为什么是「警告」而不是「自动跟随节点已有字段」（2026-09-11，我先做错了一次）：
+    本工具写 **content**，`seed_semantic.py` 走 `graph_api.upsert_node` 写 **summary**。
+    第一反应是"让 append 跟随节点的既有字段"，实测也能跑通 —— **但方向是错的**：
+    seed 的 `upsert_node` 会用 seed 脚本里的文本**覆盖 summary**
+    （`props` 里本就有 `summary` 这个 key，后面的 `props.setdefault(k, v)` 不生效），
+    于是写进 summary 的内容会在**下次重跑 seed 时静默丢失**。
+    ⇒ 两害相权取轻：
+      · 写 **content** —— seed 不碰 content，**不丢**；代价是同一节点出现两份正文；
+      · 写 summary —— 保持单份，但**会被 seed 覆盖**。
+    选前者，代价由读侧 `node_body` 兜底（get/search/dump 都已统一），并在这里明示。
+    """
+    if not (d.get("content") or "").strip() and (d.get("summary") or "").strip():
+        return ("  ⚠️ 正文原本在 summary（seed 管，重跑会覆盖它）⇒ 现写入 content，"
+                "同一节点两份正文；要改正文请改 seed 脚本，别在库里改。")
+    return ""
+
+
 def do_bulk(mg, path):
     with open(path, "r", encoding="utf-8") as f:
         ops = json.load(f)
     if not isinstance(ops, list):
         return ["bulk 文件顶层必须是 JSON 数组"]
     log = []
+    warns = []          # 字段分裂警告单独收，末尾汇总（否则每行日志都超长）
     for i, op in enumerate(ops):
         try:
             kind = op.get("op")
@@ -342,6 +400,11 @@ def do_bulk(mg, path):
                 r = do_upsert(mg, _s(op["id"]), op["label"], op.get("content", ""),
                               op.get("type", "concept"), op.get("domain", "knowledge"),
                               float(op.get("weight", 1.0)))
+                # 拆出字段分裂警告（见 field_split_warning），日志行保持一行一结果
+                _m, _, _w = r.partition("⚠️ ")
+                if _w:
+                    warns.append(f"[{i}] {_s(op['id'])} ⚠️ {_w}")
+                r = _m.strip()
             elif kind == "edge_add":
                 r = do_edge_add(mg, frm, to, op["kind"],
                                 float(op.get("weight", 1.0)), op.get("domain", "knowledge"),
@@ -368,6 +431,7 @@ def do_bulk(mg, path):
             r = f"异常: {ex}"
         who = op.get("id") or (f"{frm}->{to}" if frm and to else "<缺 id / from-src / to-dst>")
         log.append(f"[{i}] {kind} {who} => {r}")
+    log.extend(warns)
     return log
 
 
@@ -1019,7 +1083,8 @@ def main():
         print(f"label: {d.get('label')}")
         print(f"type: {d.get('type')} | domain: {d.get('domain')} | weight: {d.get('weight')} | status: {d.get('status')}")
         print(f"created: {d.get('created_at')} | updated: {d.get('updated_at')}")
-        print(f"content: {d.get('content','')}")
+        # 正文统一走 node_body（content 优先、回落 summary）—— 见该函数文档
+        print(f"content: {node_body(d)}")
         edges = all_edges(g)
         out = [(d2, k, w) for (s, d2, k, w, dm, st) in edges if s == args.id]
         inn = [(s, k, w) for (s, d2, k, w, dm, st) in edges if d2 == args.id]
@@ -1045,7 +1110,7 @@ def main():
     elif args.cmd == "search":
         nodes = all_nodes(g)
         hits = [(i, nodes[i].get("label", "")) for i in nodes
-                if args.kw in (nodes[i].get("label", "") + " " + (nodes[i].get("content", "") or ""))]
+                if args.kw in (nodes[i].get("label", "") + " " + node_body(nodes[i]))]
         print(f"命中 {len(hits)} 条（含「{args.kw}」）:")
         for i, label in hits:
             print(f"  {i} | {label[:40]}")
@@ -1058,7 +1123,7 @@ def main():
         print(f"=== 节点 ({len(ids)}) ===")
         for i in ids:
             d = nodes[i]
-            body = d.get('content', '')
+            body = node_body(d)
             if not args.full:
                 body = body[:60]
             print(f"{i} | {d.get('label','')} | {d.get('type')}/{d.get('domain')} | {d.get('status')} | {body}")
@@ -1073,7 +1138,12 @@ def main():
         try:
             r = do_upsert(mg, args.id, args.label, args.content, args.type, args.domain,
                           args.weight)
-            print(f"{r}节点: {args.id}")
+            # r 形如 "覆盖"/"新增"，可能**跟着一句字段分裂警告**（见 field_split_warning）
+            # ⇒ 拆出来单独一行，别让它插在 "覆盖节点: xxx" 中间
+            msg, _, warn = r.partition("⚠️ ")
+            print(f"{msg.strip()}节点: {args.id}")
+            if warn:
+                print(f"  ⚠️ {warn}")
         except ValueError as ex:
             # id 形态非法（如把 str_to_id 输出当 id 回写）——拒绝写入并给可读报错，
             # 而不是甩一段 traceback（2026-09-10 事故的守卫，见 check-ids）。
